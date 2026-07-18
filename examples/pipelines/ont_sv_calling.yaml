@@ -1,0 +1,116 @@
+# Sanjeevini Compose pipeline — ONT structural variant calling
+#
+# A three-step pipeline wiring revived long-read bricks:
+#   POD5 raw signal → Dorado basecalling → minimap2 alignment → Sniffles2 SV calling
+#
+# All three tools are resurrected by Jeeva and emit compatible contracts.
+# Port types are validated by Compose before any container starts.
+#
+# Usage:
+#   jeeva run examples/pipelines/ont_sv_calling.yaml \
+#       --input pod5_dir=/data/experiment/pod5 \
+#       --input reference=/data/references/hg38/hg38.fa \
+#       --input sample_id=HG002_R10 \
+#       --docker-host ssh://user@gpu-box
+#
+# Prerequisites:
+#   jeeva resurrect https://github.com/nanoporetech/dorado
+#   jeeva resurrect https://github.com/lh3/minimap2
+#   jeeva resurrect https://github.com/fritzsedlazeck/Sniffles
+
+sanjeevini_compose: "1.0"
+name: ont_sv_calling
+description: >
+  ONT long-read SV calling pipeline (POD5 → Dorado → minimap2 → Sniffles2).
+  Validated on R10.4.1 / E8.2 chemistry. GPU required for Dorado basecalling.
+
+params:
+  sample_id:    { type: string,  required: true }
+  pod5_dir:     { type: directory, required: true }
+  reference:    { type: fasta,   required: true }
+  model:        { type: string,  default: "dna_r10.4.1_e8.2_400bps_hac@v4.3.0" }
+  threads:      { type: integer, default: 16 }
+  min_svlen:    { type: integer, default: 50 }
+  min_support:  { type: integer, default: 5 }
+
+steps:
+
+  # ── Step 1: Dorado basecalling (GPU) ────────────────────────────────────
+  - name: basecall
+    tool: dorado
+    description: "Basecall POD5 files to unaligned BAM using the HAC model"
+    inputs:
+      pod5_dir: ${params.pod5_dir}
+      model:    ${params.model}
+    outputs:
+      unaligned_bam: ${workdir}/basecall/${params.sample_id}.unaligned.bam
+    resources:
+      gpus: "all"
+      min_ram_gb: 16
+    command: >
+      dorado basecaller ${inputs.model} ${inputs.pod5_dir}
+        --emit-fastq false
+        --output-dir /out/basecall/
+        --recursive
+
+  # ── Step 2: minimap2 alignment ─────────────────────────────────────────
+  - name: align
+    tool: minimap2
+    description: "Align HAC basecalled reads to reference (hg38)"
+    inputs:
+      # Compose validates: basecall.outputs.unaligned_bam → align.inputs.query_bam
+      # Type: bam.hifi (ONT unaligned BAM) → fasta (reference) → bam (aligned)
+      query_bam:  ${steps.basecall.outputs.unaligned_bam}
+      reference:  ${params.reference}
+    outputs:
+      aligned_bam: ${workdir}/align/${params.sample_id}.hg38.bam
+      bam_index:   ${workdir}/align/${params.sample_id}.hg38.bam.bai
+    resources:
+      min_cores: 8
+      min_ram_gb: 24
+    command: >
+      minimap2 -ax map-ont -t ${params.threads}
+        ${inputs.reference}
+        ${inputs.query_bam}
+        | samtools sort -@ 4 -o ${outputs.aligned_bam}
+        && samtools index ${outputs.aligned_bam}
+
+  # ── Step 3: Sniffles2 SV calling ───────────────────────────────────────
+  - name: sv_call
+    tool: sniffles2
+    description: "Call structural variants (≥ 50 bp) from aligned ONT reads"
+    inputs:
+      aligned_bam: ${steps.align.outputs.aligned_bam}
+      reference:   ${params.reference}
+    outputs:
+      vcf:  ${workdir}/sv_call/${params.sample_id}.svs.vcf.gz
+      snf:  ${workdir}/sv_call/${params.sample_id}.sniffles.snf
+    resources:
+      min_cores: 4
+      min_ram_gb: 8
+    command: >
+      sniffles
+        --input ${inputs.aligned_bam}
+        --reference ${inputs.reference}
+        --vcf ${outputs.vcf}
+        --snf ${outputs.snf}
+        --sample-id ${params.sample_id}
+        --minsvlen ${params.min_svlen}
+        --minsupport ${params.min_support}
+        --threads ${params.threads}
+
+# ── Output manifest ────────────────────────────────────────────────────────
+outputs:
+  sv_vcf:        ${steps.sv_call.outputs.vcf}
+  sniffles_snf:  ${steps.sv_call.outputs.snf}
+  aligned_bam:   ${steps.align.outputs.aligned_bam}
+
+# ── Sanity check (run by Compose after pipeline completes) ─────────────────
+sanity_check:
+  description: >
+    The SV VCF must be non-empty, contain at least one PASS-filter call,
+    and bcftools stats must not report malformed records.
+  commands:
+    - "bcftools stats ${outputs.sv_vcf} | grep ^SN | grep -q 'number of SNPs'"
+    - "bcftools view -f PASS ${outputs.sv_vcf} | grep -v '^#' | wc -l | awk '$1>0'"
+  pass_verdict: "≥1 PASS SV call in output VCF"

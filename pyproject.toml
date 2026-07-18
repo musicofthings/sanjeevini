@@ -1,0 +1,116 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sanjeevini-bio"
+version = "0.1.0"
+description = "Revive dead bioinformatics tools — with first-class support for long-read sequencing (ONT/PacBio) and workflow languages (Nextflow/Snakemake/WDL)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "sanjeevini contributors" }]
+keywords = [
+    "bioinformatics",
+    "reproducibility",
+    "agents",
+    "long-read",
+    "nanopore",
+    "pacbio",
+    "nextflow",
+    "snakemake",
+    "dependency-pinning",
+    "research-software",
+    "docker",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+# Lean core: only what every subcommand needs.
+# Heavy domain extras are opt-in so 'pip install sanjeevini-bio' stays fast.
+dependencies = [
+    "packaging>=21",
+    "PyYAML>=6",
+    "pydantic>=2",
+    "httpx>=0.27",
+    "rich>=13",           # progress, tracebacks, panels
+]
+
+[project.optional-dependencies]
+# The autonomous revive loop + Jeeva agent (Python >= 3.10, Docker required)
+agent = ["claude-agent-sdk>=0.2"]
+
+# Conda/Bioconda era pinner
+conda = ["conda-package-handling>=2", "requests>=2.31"]
+
+# R / Bioconductor resurrection support
+r = ["rpy2>=3.5"]
+
+# Long-read tool support: ONT (POD5/FAST5) + PacBio (unaligned BAM)
+longread = [
+    "pysam>=0.22",
+    "pod5>=0.3",         # ONT POD5 format I/O
+    "httpx>=0.27",       # model-bundle downloads
+]
+
+# Nextflow / Snakemake / WDL workflow-aware resurrection
+# (no extra Python deps — workflow runners invoked inside the sandbox)
+nextflow = []
+
+# MCP server exposing jeeva's core verbs as tools
+mcp = ["mcp>=1.0"]
+
+# Full dev environment
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "build>=1",
+    "twine>=5",
+]
+
+# Convenience: everything except R (rpy2 has native deps that may need manual setup)
+all = [
+    "sanjeevini-bio[agent,conda,longread,nextflow,mcp]",
+]
+
+[project.urls]
+Homepage      = "https://github.com/musicofthings/sanjeevini"
+Documentation = "https://musicofthings.github.io/sanjeevini/"
+Repository    = "https://github.com/musicofthings/sanjeevini"
+Issues        = "https://github.com/musicofthings/sanjeevini/issues"
+
+[project.scripts]
+jeeva = "sanjeevini.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests that call a real Docker daemon (skip with -m 'not integration').",
+]
+
+[tool.ruff]
+line-length    = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version         = "3.10"
+strict                 = true
+ignore_missing_imports = true

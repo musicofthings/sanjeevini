@@ -1,0 +1,23 @@
+_lazarus_ref/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+
+# Local tooling state (context-engineering-kit)
+.claude/session/
+session_handover.md

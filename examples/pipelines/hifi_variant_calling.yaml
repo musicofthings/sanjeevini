@@ -1,0 +1,144 @@
+# Sanjeevini Compose pipeline — PacBio HiFi germline variant calling
+#
+# HiFi unaligned BAM → pbmm2 alignment → DeepVariant SNV/indel calling
+#                                       → pb-CpG-tools methylation
+#                                       → PBSV structural variant calling
+#
+# Usage:
+#   jeeva run examples/pipelines/hifi_variant_calling.yaml \
+#       --input hifi_bam=/data/HG002/HG002.GRCh38.hifi.bam \
+#       --input reference=/data/references/hg38/hg38.fa \
+#       --input sample_id=HG002
+#
+# Prerequisites:
+#   jeeva resurrect https://github.com/PacificBiosciences/pbmm2
+#   jeeva resurrect https://github.com/google/deepvariant
+#   jeeva resurrect https://github.com/PacificBiosciences/pb-CpG-tools
+#   jeeva resurrect https://github.com/PacificBiosciences/pbsv
+
+sanjeevini_compose: "1.0"
+name: hifi_variant_calling
+description: >
+  PacBio HiFi germline variant calling pipeline.
+  Runs SNV/indel calling (DeepVariant), SV calling (PBSV), and CpG
+  methylation calling (pb-CpG-tools) from a single unaligned HiFi BAM.
+
+params:
+  sample_id:    { type: string,   required: true }
+  hifi_bam:     { type: bam.hifi, required: true }
+  reference:    { type: fasta,    required: true }
+  threads:      { type: integer,  default: 32 }
+  dv_model:     { type: string,   default: "DeepVariant-PACBIO-1.6.0" }
+
+steps:
+
+  # ── Step 1: pbmm2 alignment ─────────────────────────────────────────────
+  - name: align
+    tool: pbmm2
+    description: "Align HiFi reads to reference using pbmm2 (minimap2 wrapper for PacBio)"
+    inputs:
+      hifi_bam:  ${params.hifi_bam}
+      reference: ${params.reference}
+    outputs:
+      aligned_bam: ${workdir}/align/${params.sample_id}.aligned.hg38.bam
+    resources:
+      min_cores: 16
+      min_ram_gb: 32
+    command: >
+      pbmm2 align
+        --preset HiFi
+        --sort
+        --sample ${params.sample_id}
+        -j ${params.threads}
+        ${inputs.reference}
+        ${inputs.hifi_bam}
+        ${outputs.aligned_bam}
+
+  # ── Step 2a: DeepVariant SNV/indel calling ──────────────────────────────
+  - name: snv_call
+    tool: deepvariant
+    description: "Call SNVs and indels using DeepVariant (PacBio HiFi model)"
+    inputs:
+      aligned_bam: ${steps.align.outputs.aligned_bam}
+      reference:   ${params.reference}
+      model:       ${params.dv_model}
+    outputs:
+      vcf:  ${workdir}/snv/${params.sample_id}.deepvariant.vcf.gz
+      gvcf: ${workdir}/snv/${params.sample_id}.deepvariant.g.vcf.gz
+    resources:
+      gpu_required: false     # DeepVariant runs on CPU for HiFi
+      min_cores: 16
+      min_ram_gb: 64
+    command: >
+      run_deepvariant
+        --model_type PACBIO
+        --ref ${inputs.reference}
+        --reads ${inputs.aligned_bam}
+        --output_vcf ${outputs.vcf}
+        --output_gvcf ${outputs.gvcf}
+        --num_shards ${params.threads}
+
+  # ── Step 2b: pb-CpG-tools methylation calling ──────────────────────────
+  - name: methylation
+    tool: pb_cpg_tools
+    description: "Call CpG methylation from Mm/Ml tags in the aligned HiFi BAM"
+    inputs:
+      aligned_bam: ${steps.align.outputs.aligned_bam}
+      reference:   ${params.reference}
+    outputs:
+      bedmethyl:   ${workdir}/methyl/${params.sample_id}.cpg.combined.bed.gz
+      hap1_bed:    ${workdir}/methyl/${params.sample_id}.cpg.hap1.bed.gz
+      hap2_bed:    ${workdir}/methyl/${params.sample_id}.cpg.hap2.bed.gz
+    resources:
+      min_cores: 8
+      min_ram_gb: 16
+    command: >
+      aligned_bam_to_cpg_scores
+        --bam ${inputs.aligned_bam}
+        --fasta ${inputs.reference}
+        --output-prefix ${workdir}/methyl/${params.sample_id}
+        --model pb-cpg-tools-v2.3.2-revio_wgs_model
+        --threads ${params.threads}
+
+  # ── Step 2c: PBSV structural variant calling ────────────────────────────
+  - name: sv_call
+    tool: pbsv
+    description: "Call SVs from HiFi reads in two stages: discover then call"
+    inputs:
+      aligned_bam: ${steps.align.outputs.aligned_bam}
+      reference:   ${params.reference}
+    outputs:
+      svsig: ${workdir}/sv/${params.sample_id}.svsig.gz
+      vcf:   ${workdir}/sv/${params.sample_id}.pbsv.vcf
+    resources:
+      min_cores: 8
+      min_ram_gb: 32
+    command: |
+      pbsv discover --hifi \
+        ${inputs.aligned_bam} \
+        ${outputs.svsig}
+      pbsv call \
+        --hifi \
+        -j ${params.threads} \
+        ${inputs.reference} \
+        ${outputs.svsig} \
+        ${outputs.vcf}
+
+# ── Output manifest ────────────────────────────────────────────────────────
+outputs:
+  snv_vcf:      ${steps.snv_call.outputs.vcf}
+  snv_gvcf:     ${steps.snv_call.outputs.gvcf}
+  sv_vcf:       ${steps.sv_call.outputs.vcf}
+  cpg_combined: ${steps.methylation.outputs.bedmethyl}
+  aligned_bam:  ${steps.align.outputs.aligned_bam}
+
+sanity_check:
+  description: >
+    The DeepVariant VCF must contain ≥ 100k PASS variant calls (expected
+    for a 30x HiFi WGS run).  The PBSV VCF must be non-empty.
+    The CpG BED must have at least 10M CpG sites covered.
+  commands:
+    - "bcftools view -f PASS ${outputs.snv_vcf} | grep -vc '^#' | awk '$1>=100000'"
+    - "grep -vc '^#' ${outputs.sv_vcf} | awk '$1>0'"
+    - "zcat ${outputs.cpg_combined} | wc -l | awk '$1>=10000000'"
+  pass_verdict: "≥100k PASS SNVs, ≥1 SV, ≥10M CpG sites covered"
