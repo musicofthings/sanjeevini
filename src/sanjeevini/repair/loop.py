@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -47,7 +48,7 @@ import yaml
 
 from sanjeevini import __version__ as JEEVA_VERSION
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
-from sanjeevini.sandbox.checkpoint import TurnRecord
+from sanjeevini.sandbox.checkpoint import CheckpointStore, TurnRecord
 from sanjeevini.sandbox.docker_sandbox import DockerError, DockerSandbox, ExecResult
 from sanjeevini.scouts.python_scout import PythonResurrectionPlan, PythonScout
 from sanjeevini.scouts.r_scout import RResurrectionPlan, RScout
@@ -753,7 +754,7 @@ verdict() { echo "===DECAY=== naive_runs=$1 stage=$2 reason=$3"; exit 0; }
 TO="timeout 1200"; command -v timeout >/dev/null 2>&1 || TO=""
 command -v git >/dev/null 2>&1 || verdict 0 clone needs_git
 REPODIR=$(mktemp -d)/repo
-git clone --depth 1 "REPO_URL" "$REPODIR" >/tmp/clone.log 2>&1 \
+git clone --depth 1 -- "REPO_URL" "$REPODIR" >/tmp/clone.log 2>&1 \
   || verdict 0 clone clone_failed
 cd "$REPODIR"
 if [ -f environment.yml ] && command -v conda >/dev/null 2>&1; then
@@ -805,6 +806,10 @@ $TO bash -lc "$EX" >/tmp/ex.log 2>&1 \
 
 _DECAY_LINE = "===DECAY=== naive_runs="
 
+# A repo URL is interpolated into the decay shell script; allow only characters
+# that cannot break out of the double-quoted context or inject a command.
+_SAFE_URL_RE = re.compile(r"^[A-Za-z0-9._:/@~+-]+$")
+
 
 def _parse_decay_output(output: str) -> tuple[bool | None, str, str]:
     """Parse a ``===DECAY===`` line from probe output into (runs, stage, reason)."""
@@ -831,6 +836,8 @@ def _docker_decay_probe(
     url: str, sandbox_mode: str, docker_host: str | None
 ) -> tuple[bool | None, str, str]:
     """Default probe: run the decay protocol on the host or in a fresh container."""
+    if not _SAFE_URL_RE.match(url):
+        return None, "error", "unsafe_url"
     script = _DECAY_SCRIPT.replace("REPO_URL", url)
     if sandbox_mode == "host":
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -919,18 +926,26 @@ class ResurrectCommand:
             checkpoint_dir = (
                 Path(self.args.checkpoint_dir) if self.args.checkpoint_dir else None
             )
+            # Resume from the last good snapshot when this checkpoint has prior turns.
+            resume_image: str | None = None
+            if checkpoint_dir is not None:
+                resume_image = CheckpointStore(checkpoint_dir).last_successful_snapshot()
+
+            agent = self._build_agent(spec)  # fail fast before starting a container
             sandbox = DockerSandbox(
-                spec.base_image,
+                resume_image or spec.base_image,
                 workdir=self.args.workdir,
                 docker_host=self.args.docker_host,
                 gpus=self.args.gpus,
                 checkpoint_dir=checkpoint_dir,
             )
             sandbox.start()
-            sandbox.copy_in(repo_dir, self.args.workdir)  # place the checkout in the sandbox
-            agent = self._build_agent(spec)
-            loop = RepairLoop(spec, sandbox, agent, max_turns=self.args.turns)
             try:
+                if resume_image is None:
+                    # Fresh run: seed the container with the checkout. On resume the
+                    # snapshot already carries the repo and any in-container edits.
+                    sandbox.copy_in(repo_dir, self.args.workdir)
+                loop = RepairLoop(spec, sandbox, agent, max_turns=self.args.turns)
                 outcome = loop.run()
             finally:
                 if not self.args.keep:
@@ -946,7 +961,7 @@ class ResurrectCommand:
         fails (e.g. the URL is wrong or the repo is private/unreachable).
         """
         clone = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["git", "clone", "--depth", "1", url, str(dest)],
+            ["git", "clone", "--depth", "1", "--", url, str(dest)],
             check=False,
             capture_output=True,
             text=True,

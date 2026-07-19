@@ -255,7 +255,11 @@ class ComposeCommand:
             sys.exit(1)
 
         overrides = _parse_overrides(getattr(self.args, "input", None))
-        result = pipeline.run(overrides, docker_host=getattr(self.args, "docker_host", None))
+        try:
+            result = pipeline.run(overrides, docker_host=getattr(self.args, "docker_host", None))
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
         if not result.success:
             print(f"{len(result.errors)} validation error(s):")
             for i, err in enumerate(result.errors, 1):

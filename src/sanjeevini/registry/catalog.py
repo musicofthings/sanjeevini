@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from sanjeevini.contracts.schema import ContractSchema
 
@@ -178,7 +179,10 @@ def load_catalog(registry_dirs: list[Path]) -> list[RegistryEntry]:
         if not directory.is_dir():
             continue
         for contract_path in sorted(directory.rglob("contract.yaml")):
-            entry = _entry_from_bundle(contract_path)
+            try:
+                entry = _entry_from_bundle(contract_path)
+            except (yaml.YAMLError, ValidationError):
+                continue  # skip a malformed/partial bundle, keep the rest of the catalog
             entries.setdefault(entry.slug, entry)
     return sorted(entries.values(), key=lambda e: e.name.lower())
 

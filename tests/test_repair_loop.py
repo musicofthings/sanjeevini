@@ -341,6 +341,15 @@ def test_run_decay_check_with_injected_probe() -> None:
     }
 
 
+def test_decay_probe_rejects_unsafe_url_before_running() -> None:
+    from sanjeevini.repair.loop import _docker_decay_probe
+
+    # A URL that would break out of the double-quoted git-clone context must be
+    # rejected before any shell/docker command is built or run.
+    unsafe = 'https://x/a" ; touch pwned ; "'
+    assert _docker_decay_probe(unsafe, "host", None) == (None, "error", "unsafe_url")
+
+
 def test_decay_verdict_not_decayed_when_runs() -> None:
     v = DecayVerdict(url="u", verdict="naive_runs", stage="example", reason="ran_ok")
     assert v.decayed is False
