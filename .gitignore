@@ -20,4 +20,5 @@ htmlcov/
 
 # Local tooling state (context-engineering-kit)
 .claude/session/
+.claude/*.log
 session_handover.md

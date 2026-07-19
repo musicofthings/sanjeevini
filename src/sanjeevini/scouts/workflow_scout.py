@@ -19,6 +19,7 @@ The key differences from Python resurrection
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -149,10 +150,8 @@ def analyse_nextflow(repo_root: Path) -> NextflowAnalysis:
     all_text = ""
     for p in [ana.main_nf, *ana.config_files[:3]]:
         if p and p.exists():
-            try:
+            with contextlib.suppress(OSError):
                 all_text += p.read_text(errors="replace")
-            except OSError:
-                pass
     m = _NFCORE_META.search(all_text)
     if m:
         ana.nfcore_pipeline = True
@@ -192,7 +191,9 @@ def analyse_snakemake(repo_root: Path) -> SnakemakeAnalysis:
             break
 
     # Locate config files
-    ana.config_files = sorted(repo_root.glob("config/*.yaml")) + sorted(repo_root.glob("config/*.yml"))
+    ana.config_files = sorted(repo_root.glob("config/*.yaml")) + sorted(
+        repo_root.glob("config/*.yml")
+    )
 
     if ana.snakefile:
         try:
@@ -257,7 +258,7 @@ class WorkflowResurrectionPlan:
     entry_point: str                        # e.g. "nextflow run main.nf"
     container_strategy: str                 # e.g. "-profile docker"
     runner_version_pin: str | None          # e.g. "nextflow 23.10.1"
-    sanity_check: str                       # falsifiable, e.g. "--help exits 0; output dir non-empty"
+    sanity_check: str                       # falsifiable pass criterion
     known_issues: list[str] = field(default_factory=list)
     # Raw analysis objects for downstream consumption
     nextflow: NextflowAnalysis | None = None
