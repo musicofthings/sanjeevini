@@ -69,6 +69,13 @@ nextflow = []
 # MCP server exposing jeeva's core verbs as tools
 mcp = ["mcp>=1.0"]
 
+# Semantic registry search (embeddings + FAISS). Without these, registry search
+# falls back to a dependency-free lexical scorer.
+search = [
+    "sentence-transformers>=2.2",   # all-MiniLM-L6-v2 (90 MB, CPU-friendly)
+    "faiss-cpu>=1.7",
+]
+
 # Full dev environment
 dev = [
     "pytest>=7",
@@ -81,7 +88,7 @@ dev = [
 
 # Convenience: everything except R (rpy2 has native deps that may need manual setup)
 all = [
-    "sanjeevini-bio[agent,conda,longread,nextflow,mcp]",
+    "sanjeevini-bio[agent,conda,longread,nextflow,mcp,search]",
 ]
 
 [project.urls]
