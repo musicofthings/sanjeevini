@@ -239,6 +239,44 @@ def test_loop_pass_emits_full_contract(tmp_path: Path) -> None:
     assert '"python"' in (d / "predict.py").read_text()
 
 
+def test_smoke_test_is_self_contained_replay(tmp_path: Path) -> None:
+    actions = [
+        RepairAction(kind="exec", cmd=["bash", "-lc", "cd repo && pip install -e ."]),
+        RepairAction(kind="exec", cmd=["ls", "/tmp"]),  # exploration, still replayed
+        RepairAction(
+            kind="exec",
+            cmd=["bash", "-lc", "cd repo && python -c \"import json; print('ok')\""],
+            is_sanity_check=True,
+        ),
+    ]
+    sandbox = FakeSandbox(returncodes=[0, 0, 0])
+    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
+                         contracts_root=tmp_path, today="2026-07-19").run()
+
+    # every successful command is recorded, in order
+    assert outcome.reproduction == [a.cmd for a in actions]
+
+    smoke = (tmp_path / "foo" / "smoke_test.sh").read_text()
+    # clones the repo first, so it runs from a bare base image
+    assert "git clone --depth 1 -- https://github.com/acme/foo repo" in smoke
+    # each command runs in its own subshell (fresh cwd per exec), nested quotes intact
+    assert "( bash -lc 'cd repo && pip install -e .' )" in smoke
+    assert "python -c" in smoke
+    # REPRODUCE.md documents the chain
+    assert "## Reproduce" in (tmp_path / "foo" / "REPRODUCE.md").read_text()
+
+
+def test_reproduction_excludes_failed_turns(tmp_path: Path) -> None:
+    actions = [
+        RepairAction(kind="exec", cmd=["bad", "cmd"]),                     # fails
+        RepairAction(kind="exec", cmd=["good"], is_sanity_check=True),     # passes
+    ]
+    sandbox = FakeSandbox(returncodes=[1, 0])
+    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
+                         contracts_root=tmp_path).run()
+    assert outcome.reproduction == [["good"]]  # the failed attempt is not in the recipe
+
+
 def test_provenance_written_on_pass_has_required_keys(tmp_path: Path) -> None:
     sandbox = FakeSandbox(returncodes=[0])
     loop = RepairLoop(

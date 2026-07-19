@@ -394,6 +394,7 @@ class RepairOutcome:
     reason: str = ""
     bugs_fixed: list[dict[str, str]] = field(default_factory=list)
     sanity_cmd: list[str] = field(default_factory=list)
+    reproduction: list[list[str]] = field(default_factory=list)
     final_image: str = ""
     contract_dir: Path | None = None
 
@@ -458,6 +459,7 @@ class RepairLoop:
         verdict: Verdict | None = None
         reason = ""
         sanity_cmd: list[str] = []
+        reproduction: list[list[str]] = []
         sandbox_errors = 0
 
         while turn < self.max_turns:
@@ -500,6 +502,11 @@ class RepairLoop:
                 )
             )
             last_rc, last_out, last_err = result.returncode, result.stdout, result.stderr
+
+            # Record the successful commands, in order — this is the reproduction
+            # recipe emitted as a self-contained smoke test.
+            if result.ok:
+                reproduction.append(list(action.cmd))
 
             # A dead container can't be repaired in place; bail after a few in a row.
             if container_error:
@@ -545,6 +552,7 @@ class RepairLoop:
             reason=reason,
             bugs_fixed=bugs_fixed,
             sanity_cmd=sanity_cmd,
+            reproduction=reproduction,
             final_image=final_image,
         )
         outcome.contract_dir = self._emit(outcome)
@@ -600,7 +608,7 @@ class RepairLoop:
         (slug_dir / "Dockerfile").write_text(self._dockerfile(entry), encoding="utf-8")
         (slug_dir / "predict.py").write_text(self._predict_py(entry), encoding="utf-8")
         (slug_dir / "smoke_test.sh").write_text(
-            self._smoke_test(outcome.sanity_cmd), encoding="utf-8"
+            self._smoke_test(outcome), encoding="utf-8"
         )
         (slug_dir / "REPRODUCE.md").write_text(
             self._reproduce_md(outcome), encoding="utf-8"
@@ -647,19 +655,33 @@ class RepairLoop:
             cmd=json.dumps(entry),
         )
 
-    def _smoke_test(self, sanity_cmd: list[str]) -> str:
-        line = (
-            " ".join(shlex.quote(part) for part in sanity_cmd)
-            if sanity_cmd
-            else "echo 'no sanity command was captured' >&2; exit 1"
-        )
-        return (
+    def _smoke_test(self, outcome: RepairOutcome) -> str:
+        """Emit a self-contained reproduction script.
+
+        Replays every command that succeeded during the run, in order, ending
+        with the sanity check. Each command runs in its own subshell starting
+        from the script's directory — exactly as the sandbox executed it (a
+        fresh working directory per exec) — so ``cd repo && …`` steps replay
+        correctly. The repo is cloned first if it isn't already present, making
+        the script runnable from a bare base image, not just the final image.
+        """
+        header = (
             "#!/usr/bin/env bash\n"
-            f"# Smoke test for {self.spec.tool_slug} (Jeeva {JEEVA_VERSION}).\n"
-            f"# Success criterion: {self.spec.sanity_check}\n"
+            f"# Self-contained reproduction of {self.spec.tool_slug} "
+            f"(emitted by Jeeva {JEEVA_VERSION}).\n"
+            f"# Replays the verified command chain; success criterion:\n"
+            f"#   {self.spec.sanity_check}\n"
             "set -euo pipefail\n"
-            f"{line}\n"
+            'cd "$(cd "$(dirname "$0")" && pwd)"\n'
         )
+        if not outcome.reproduction:
+            return header + "echo 'no reproduction was captured' >&2\nexit 1\n"
+
+        lines = []
+        if self.spec.repo_url:
+            lines.append(f"[ -d repo ] || git clone --depth 1 -- {self.spec.repo_url} repo")
+        lines += [f"( {shlex.join(cmd)} )" for cmd in outcome.reproduction]
+        return header + "\n".join(lines) + "\n"
 
     def _reproduce_md(self, outcome: RepairOutcome) -> str:
         verdict_line = {
@@ -679,6 +701,19 @@ class RepairLoop:
             f"- **Cost (USD):** {outcome.cost_usd}\n\n"
             f"## Sanity check\n\n{self.spec.sanity_check}\n\n"
             f"## Result\n\n{verdict_line}\n"
+            f"{self._reproduction_section(outcome)}"
+        )
+
+    def _reproduction_section(self, outcome: RepairOutcome) -> str:
+        """Return the Markdown block listing the verified reproduction commands."""
+        if not outcome.reproduction:
+            return ""
+        steps = "\n".join(shlex.join(cmd) for cmd in outcome.reproduction)
+        return (
+            "\n## Reproduce\n\n"
+            "`bash smoke_test.sh` replays the verified command chain "
+            "(clones the repo if needed, then):\n\n"
+            f"```bash\n{steps}\n```\n"
         )
 
     def _provenance(self, outcome: RepairOutcome) -> dict[str, object]:
