@@ -18,6 +18,13 @@ htmlcov/
 # OS
 .DS_Store
 
+# Generated resurrection output from local runs (the repair loop's contract
+# emitter writes contracts/{slug}/; the curated published catalog lives in
+# registry/, which is NOT ignored).
+/contracts/
+lazarus-output/
+jeeva-output/
+
 # Local tooling state (context-engineering-kit)
 .claude/session/
 .claude/*.log

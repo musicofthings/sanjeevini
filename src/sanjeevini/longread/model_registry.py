@@ -23,10 +23,9 @@ PacBio model names follow the pb-CpG-tools / DeepVariant convention:
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from sanjeevini.contracts.schema import ModelBundleRef
 
@@ -39,7 +38,7 @@ LongReadTool = Literal["dorado", "medaka", "clair3", "deepvariant", "pb_cpg_tool
 # Source: https://github.com/nanoporetech/dorado#available-basecalling-models
 # ---------------------------------------------------------------------------
 
-_DORADO_MODELS: list[dict] = [
+_DORADO_MODELS: list[dict[str, Any]] = [
     # ── R10.4.1 / E8.2 (current generation as of 2024-2026) ──────────────
     {
         "model_name": "dna_r10.4.1_e8.2_400bps_hac@v4.3.0",
@@ -106,7 +105,7 @@ _DORADO_MODELS: list[dict] = [
 # Source: https://github.com/nanoporetech/medaka#models
 # ---------------------------------------------------------------------------
 
-_MEDAKA_MODELS: list[dict] = [
+_MEDAKA_MODELS: list[dict[str, Any]] = [
     # R10.4.1
     {
         "model_name": "r1041_e82_400bps_hac_v4.3.0",
@@ -143,7 +142,7 @@ _MEDAKA_MODELS: list[dict] = [
 # Source: https://github.com/HKU-BAL/Clair3#pre-trained-models
 # ---------------------------------------------------------------------------
 
-_CLAIR3_MODELS: list[dict] = [
+_CLAIR3_MODELS: list[dict[str, Any]] = [
     {
         "model_name": "ont_guppy5_r941_min_hac_g507",
         "chemistry": "r9.4.1_e8.1",
@@ -187,7 +186,7 @@ _CLAIR3_MODELS: list[dict] = [
 # Source: https://github.com/google/deepvariant#model-files
 # ---------------------------------------------------------------------------
 
-_DEEPVARIANT_MODELS: list[dict] = [
+_DEEPVARIANT_MODELS: list[dict[str, Any]] = [
     {
         "model_name": "DeepVariant-ONT-1.6.0",
         "chemistry": "r10.4.1_e8.2",
@@ -214,9 +213,9 @@ _DEEPVARIANT_MODELS: list[dict] = [
 
 @dataclass
 class ModelIndex:
-    _records: list[dict] = field(default_factory=list)
+    _records: list[dict[str, Any]] = field(default_factory=list)
 
-    def add(self, records: list[dict], tool: str) -> None:
+    def add(self, records: list[dict[str, Any]], tool: str) -> None:
         for r in records:
             self._records.append({**r, "tool": tool})
 
@@ -284,7 +283,7 @@ MODEL_INDEX.add(_DEEPVARIANT_MODELS, "deepvariant")
 # ---------------------------------------------------------------------------
 
 # Patterns that signal a specific ONT chemistry in READMEs / config files
-_CHEMISTRY_PATTERNS: list[tuple[re.Pattern, str]] = [
+_CHEMISTRY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"r10\.4\.1|r10_4_1|R10\.4\.1|r1041", re.I), "r10.4.1_e8.2"),
     (re.compile(r"r9\.4\.1|r9_4_1|R9\.4\.1|r941",   re.I), "r9.4.1_e8.1"),
     (re.compile(r"hifi|ccs|pacbio_hifi|revio|sequel.?ii?e", re.I), "pacbio-hifi"),

@@ -11,13 +11,11 @@ first-class citizens here, not afterthoughts.
 
 from __future__ import annotations
 
-import json
 from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
-
 
 # ---------------------------------------------------------------------------
 # Vocabulary enums
@@ -152,10 +150,12 @@ class ContractSchema(BaseModel):
     min_cores:    int | None = None
 
     # Workflow type — set by the Workflow Scout, not the Python Scout
-    workflow_type: Literal["python", "r", "nextflow", "snakemake", "wdl", "cwl", "binary"] = "python"
+    workflow_type: Literal[
+        "python", "r", "nextflow", "snakemake", "wdl", "cwl", "binary"
+    ] = "python"
 
     @model_validator(mode="after")
-    def _no_duplicate_port_names(self) -> "ContractSchema":
+    def _no_duplicate_port_names(self) -> ContractSchema:
         in_names  = [p.name for p in self.inputs]
         out_names = [p.name for p in self.outputs]
         if len(in_names) != len(set(in_names)):
@@ -170,7 +170,7 @@ class ContractSchema(BaseModel):
 
     def compatible_with(
         self,
-        downstream: "ContractSchema",
+        downstream: ContractSchema,
         port_map: dict[str, str],
     ) -> list[str]:
         """Check that each (my_output_port → their_input_port) mapping is type-safe.
@@ -239,9 +239,9 @@ class ContractSchema(BaseModel):
         return self.model_dump_json(indent=indent)
 
     @classmethod
-    def from_json(cls, text: str) -> "ContractSchema":
+    def from_json(cls, text: str) -> ContractSchema:
         return cls.model_validate_json(text)
 
     @classmethod
-    def from_file(cls, path: Path) -> "ContractSchema":
+    def from_file(cls, path: Path) -> ContractSchema:
         return cls.from_json(path.read_text())

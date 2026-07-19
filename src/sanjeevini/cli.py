@@ -19,19 +19,43 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    SubParsers = argparse._SubParsersAction[argparse.ArgumentParser]
 
 
-def _add_resurrect(sub: argparse.Action) -> None:
+def _add_resurrect(sub: SubParsers) -> None:
     p = sub.add_parser("resurrect", help="Revive a dead research repo from a GitHub URL.")
     p.add_argument("url", help="GitHub URL of the target repo.")
-    p.add_argument("--image", help="Override the base Docker image (skips Scout image selection).")
-    p.add_argument("--goal-file", metavar="FILE", help="Override Scout goal with a local text file.")
-    p.add_argument("--workdir", default="/workspace", help="Working directory inside the container.")
-    p.add_argument("--keep", action="store_true", help="Keep container after success (for inspection).")
+    p.add_argument(
+        "--image", help="Override the base Docker image (skips Scout image selection)."
+    )
+    p.add_argument(
+        "--goal-file", metavar="FILE", help="Override Scout goal with a local text file."
+    )
+    p.add_argument(
+        "--workdir", default="/workspace", help="Working directory inside the container."
+    )
+    p.add_argument(
+        "--keep", action="store_true", help="Keep container after success (for inspection)."
+    )
     p.add_argument("--turns", type=int, default=60, help="Maximum repair-loop turns (default: 60).")
-    p.add_argument("--budget-usd", type=float, help="Hard cost cap in USD (requires claude-agent-sdk ≥ 0.3).")
-    p.add_argument("--checkpoint-dir", metavar="DIR", help="Directory for turn-level checkpoints (enables resume).")
-    p.add_argument("--no-scout", action="store_true", help="Skip Scout phase; --image and --goal-file required.")
+    p.add_argument(
+        "--budget-usd",
+        type=float,
+        help="Hard cost cap in USD (requires claude-agent-sdk ≥ 0.3).",
+    )
+    p.add_argument(
+        "--checkpoint-dir",
+        metavar="DIR",
+        help="Directory for turn-level checkpoints (enables resume).",
+    )
+    p.add_argument(
+        "--no-scout",
+        action="store_true",
+        help="Skip Scout phase; --image and --goal-file required.",
+    )
     p.add_argument(
         "--docker-host",
         default=None,
@@ -41,7 +65,7 @@ def _add_resurrect(sub: argparse.Action) -> None:
     p.add_argument("--gpus", default=None, help="GPU spec forwarded to docker run, e.g. 'all'.")
 
 
-def _add_pin(sub: argparse.Action) -> None:
+def _add_pin(sub: SubParsers) -> None:
     p = sub.add_parser("pin", help="Resolve packages to commit-era versions.")
     p.add_argument("packages", nargs="+", help="Package names to pin.")
     p.add_argument(
@@ -60,26 +84,40 @@ def _add_pin(sub: argparse.Action) -> None:
         action="store_true",
         help="Pin against a Bioconductor release (resolves from CRAN + Bioc).",
     )
-    p.add_argument("--channel", action="append", metavar="CH", help="Extra conda channels (repeatable).")
-    p.add_argument("--json", action="store_true", help="Emit JSON instead of pip/conda install lines.")
+    p.add_argument(
+        "--channel", action="append", metavar="CH", help="Extra conda channels (repeatable)."
+    )
+    p.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of pip/conda install lines."
+    )
 
 
-def _add_run(sub: argparse.Action) -> None:
+def _add_run(sub: SubParsers) -> None:
     p = sub.add_parser("run", help="Execute a Sanjeevini Compose pipeline.")
     p.add_argument("pipeline", help="Path to pipeline YAML.")
     p.add_argument("--input", action="append", metavar="K=V", help="Input overrides (repeatable).")
-    p.add_argument("--registry", action="append", metavar="DIR", help="Local registry paths (repeatable).")
+    p.add_argument(
+        "--registry", action="append", metavar="DIR", help="Local registry paths (repeatable)."
+    )
     p.add_argument("--docker-host", default=None, metavar="HOST")
-    p.add_argument("--dry-run", action="store_true", help="Validate YAML and type-check I/O without running.")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate YAML and type-check I/O without running.",
+    )
 
 
-def _add_registry(sub: argparse.Action) -> None:
+def _add_registry(sub: SubParsers) -> None:
     p = sub.add_parser("registry", help="Browse or search the revived-tool registry.")
     rsub = p.add_subparsers(dest="registry_cmd", required=True)
 
     ls = rsub.add_parser("list", help="List all tools in the catalog.")
-    ls.add_argument("--domain", help="Filter by domain (e.g. longread, proteomics, variant-calling).")
-    ls.add_argument("--platform", help="Filter by sequencing platform (ont, pacbio_hifi, illumina).")
+    ls.add_argument(
+        "--domain", help="Filter by domain (e.g. longread-ont, proteomics, variant-calling)."
+    )
+    ls.add_argument(
+        "--platform", help="Filter by sequencing platform (ont, pacbio_hifi, illumina)."
+    )
     ls.add_argument("--json", action="store_true")
 
     sr = rsub.add_parser("search", help="Semantic search over the catalog.")
@@ -90,8 +128,10 @@ def _add_registry(sub: argparse.Action) -> None:
     pull.add_argument("tool", help="Tool name or slug (e.g. sniffles2, dorado-align).")
 
 
-def _add_decay_check(sub: argparse.Action) -> None:
-    p = sub.add_parser("decay-check", help="Agent-free 'does this repo still install and run today?'")
+def _add_decay_check(sub: SubParsers) -> None:
+    p = sub.add_parser(
+        "decay-check", help="Agent-free 'does this repo still install and run today?'"
+    )
     p.add_argument("url", help="GitHub URL to check.")
     p.add_argument(
         "--sandbox",
@@ -103,9 +143,11 @@ def _add_decay_check(sub: argparse.Action) -> None:
     p.add_argument("--json", action="store_true", help="Emit machine-readable verdict.")
 
 
-def _add_mcp(sub: argparse.Action) -> None:
+def _add_mcp(sub: SubParsers) -> None:
     p = sub.add_parser("mcp", help="Start Jeeva as an MCP server (stdio transport).")
-    p.add_argument("--host", default="stdio", choices=["stdio", "sse"], help="Transport (default: stdio).")
+    p.add_argument(
+        "--host", default="stdio", choices=["stdio", "sse"], help="Transport (default: stdio)."
+    )
     p.add_argument("--port", type=int, default=8765, help="Port for SSE transport.")
 
 
