@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sanjeevini — revive dead bioinformatics tools</title>
+<meta name="description" content="Sanjeevini (agent: Jeeva) resurrects dead bioinformatics tools into pinned, verified, containerised bricks — with first-class long-read and workflow support." />
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1a1a1a; --muted: #5b5b5b; --line: #e6e2da;
+    --card: #ffffff; --accent: #2e7d5b; --accent-2: #b5651d;
+    --code-bg: #f4f1ea; --code-fg: #2a2a2a; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14140f; --fg: #ece8df; --muted: #9d9a90; --line: #2b2a24;
+      --card: #1c1b16; --accent: #5fce9b; --accent-2: #e0a15e;
+      --code-bg: #211f19; --code-fg: #d6d2c7; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf7; --fg: #1a1a1a; --muted: #5b5b5b; --line: #e6e2da;
+    --card: #ffffff; --accent: #2e7d5b; --accent-2: #b5651d; --code-bg: #f4f1ea; --code-fg: #2a2a2a;
+  }
+  :root[data-theme="dark"] {
+    --bg: #14140f; --fg: #ece8df; --muted: #9d9a90; --line: #2b2a24;
+    --card: #1c1b16; --accent: #5fce9b; --accent-2: #e0a15e; --code-bg: #211f19; --code-fg: #d6d2c7;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, kbd { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  header.hero { padding: 64px 0 40px; border-bottom: 1px solid var(--line); }
+  .kicker { color: var(--accent); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+  h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1; margin: 12px 0 8px; letter-spacing: -0.02em; }
+  .lede { font-size: 1.15rem; color: var(--muted); margin: 0 0 24px; max-width: 44ch; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; background: var(--card); }
+  h2 { font-size: 1.5rem; margin: 48px 0 6px; letter-spacing: -0.01em; }
+  h2 .num { color: var(--accent); font-variant-numeric: tabular-nums; }
+  h3 { font-size: 1.05rem; margin: 22px 0 6px; }
+  p { margin: 8px 0; }
+  .muted { color: var(--muted); }
+  pre {
+    background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin: 12px 0;
+  }
+  pre .c { color: var(--muted); }
+  pre .k { color: var(--accent); }
+  :not(pre) > code {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 5px;
+    padding: 1px 6px; font-size: 0.9em;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .card h3 { margin-top: 0; }
+  .card .verb { color: var(--accent-2); }
+  ol.phases { list-style: none; counter-reset: p; padding: 0; margin: 16px 0; }
+  ol.phases li { counter-increment: p; position: relative; padding: 10px 0 10px 44px; border-bottom: 1px solid var(--line); }
+  ol.phases li:last-child { border-bottom: none; }
+  ol.phases li::before {
+    content: counter(p); position: absolute; left: 0; top: 10px;
+    width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff;
+    display: grid; place-items: center; font-size: 14px; font-weight: 700;
+  }
+  ol.phases b { font-weight: 650; }
+  .note { border-left: 3px solid var(--accent-2); background: var(--card); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  footer { margin: 56px 0 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+  .toggle { position: fixed; top: 14px; right: 14px; background: var(--card); border: 1px solid var(--line); color: var(--fg);
+    border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<button class="toggle" id="themeToggle" aria-label="Toggle theme">◐ theme</button>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">Sanjeevini · agent: Jeeva</div>
+    <h1>Bring dead bioinformatics tools back to life.</h1>
+    <p class="lede">Jeeva reads a dead research repo, writes its own falsifiable plan, and repairs it inside a Docker sandbox until it <em>provably</em> runs — emitting a pinned, verified, composable brick.</p>
+    <div class="badges">
+      <span class="badge">Python ≥ 3.10</span>
+      <span class="badge">Long-read first-class (ONT · PacBio)</span>
+      <span class="badge">Nextflow · Snakemake · WDL</span>
+      <span class="badge">Typed genomic I/O</span>
+      <span class="badge">MCP server</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <h2>Install</h2>
+    <pre><span class="c"># From source (this repo)</span>
+git clone https://github.com/musicofthings/sanjeevini
+cd sanjeevini
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e .
+
+<span class="c"># Optional extras, opt in to what you need:</span>
+pip install -e <span class="k">'.[agent]'</span>     <span class="c"># autonomous resurrect (anthropic; needs Docker + ANTHROPIC_API_KEY)</span>
+pip install -e <span class="k">'.[search]'</span>    <span class="c"># semantic registry search (sentence-transformers + faiss)</span>
+pip install -e <span class="k">'.[longread]'</span>  <span class="c"># ONT/PacBio raw-signal I/O (pysam, pod5)</span>
+pip install -e <span class="k">'.[mcp]'</span>       <span class="c"># MCP server deps</span></pre>
+    <p class="muted">The command is <code>jeeva</code>. Run <code>jeeva --help</code> to list every subcommand.</p>
+  </section>
+
+  <section>
+    <h2>What each verb does</h2>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="verb">jeeva pin</span></h3>
+        <p>Resolve packages to the versions that were live on a date — PyPI, conda/Bioconda, or Bioconductor.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">jeeva decay-check</span></h3>
+        <p>Agent-free: does a repo still install and run today? Emits <code>naive_runs</code> / <code>install_fails</code> / <code>run_fails</code>.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">jeeva resurrect</span></h3>
+        <p>Autonomous repair loop: scout → plan → build → repair → prove → emit a verified contract bundle.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">jeeva registry</span></h3>
+        <p>Browse, search, and pull the catalog of revived tools. Semantic search with a lexical fallback.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">jeeva run</span></h3>
+        <p>Compose revived bricks into a pipeline. Port types are validated <em>before</em> any container starts.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">jeeva mcp</span></h3>
+        <p>Expose every verb as MCP tools so any agent (Claude Code, etc.) can call them directly.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quickstart</h2>
+
+    <h3>1 · Pin to a commit era</h3>
+    <pre><span class="k">jeeva pin</span> --date 2021-01-01 pysam numpy
+<span class="c"># → pip install pysam==0.16.0.1 …</span>
+<span class="k">jeeva pin</span> --conda --date 2021-06-01 bwa samtools   <span class="c"># Bioconda/conda-forge</span>
+<span class="k">jeeva pin</span> --bioc  --date 2021-06-01 DESeq2          <span class="c"># Bioconductor</span></pre>
+
+    <h3>2 · Check whether a repo has decayed</h3>
+    <pre><span class="k">jeeva decay-check</span> https://github.com/some/dead-tool --json
+<span class="c"># → {"verdict": "install_fails", "stage": "install", "reason": "pip_requirements_failed", "url": "..."}</span></pre>
+
+    <h3>3 · Resurrect a dead tool</h3>
+    <pre><span class="c"># Needs the [agent] extra, a running Docker daemon, and ANTHROPIC_API_KEY.</span>
+export ANTHROPIC_API_KEY=sk-...
+<span class="k">jeeva resurrect</span> https://github.com/nanoporetech/medaka \
+    --turns 40 --checkpoint-dir ./.jeeva/medaka   <span class="c"># resumable</span>
+<span class="c"># On PASS, a verified bundle lands in ./contracts/&lt;tool&gt;/:</span>
+<span class="c">#   contract.yaml · predict.py · Dockerfile · smoke_test.sh · REPRODUCE.md · PROVENANCE.json</span></pre>
+    <div class="note">
+      Jeeva never declares success on its own word: a resurrection only PASSes when a command
+      it marks as the <b>sanity check</b> actually exits 0 inside the sandbox — the measurable,
+      falsifiable criterion from the plan.
+    </div>
+
+    <h3>4 · Browse &amp; search the registry</h3>
+    <pre><span class="k">jeeva registry</span> list --platform ont
+<span class="k">jeeva registry</span> search <span class="k">"SV caller for ONT"</span>
+<span class="k">jeeva registry</span> pull sniffles2</pre>
+
+    <h3>5 · Compose a typed pipeline</h3>
+    <pre><span class="c"># Validate port types without running anything:</span>
+<span class="k">jeeva run</span> examples/pipelines/ont_sv_calling.yaml --dry-run
+<span class="c"># → PASS — 3 steps, all port mappings type-check.</span></pre>
+  </section>
+
+  <section>
+    <h2>Use it from an agent (MCP)</h2>
+    <p>Start the stdio server and register it. Every verb becomes a callable tool.</p>
+    <pre><span class="c">// .mcp.json</span>
+{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"jeeva"</span>: { <span class="k">"command"</span>: <span class="k">"jeeva"</span>, <span class="k">"args"</span>: [<span class="k">"mcp"</span>] }
+  }
+}</pre>
+    <p class="muted">Tools exposed: <code>resurrect</code>, <code>pin</code>, <code>decay_check</code>, <code>registry_search</code>, <code>run_pipeline</code>.</p>
+  </section>
+
+  <section>
+    <h2>How Jeeva works</h2>
+    <ol class="phases">
+      <li><b>Sandbox</b> — a disposable Docker container with long-read hardware profiles, turn-level checkpoints, and read-only raw-signal mounts.</li>
+      <li><b>Pinners</b> — resolve every dependency to its commit era across PyPI, conda/Bioconda, and Bioconductor.</li>
+      <li><b>Scouts</b> — read the repo (Python, R/Bioconductor, or a Nextflow/Snakemake/WDL workflow) and write a plan with a <em>falsifiable</em> sanity check.</li>
+      <li><b>Repair loop</b> — build → run → read the real traceback → patch → retry, checkpointing each turn; emit a contract on PASS.</li>
+      <li><b>Registry</b> — a searchable catalog of every revived tool, with typed contracts and provenance.</li>
+      <li><b>Compose</b> — wire bricks into pipelines; genomic I/O types are checked before any container starts.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p><b>Sanjeevini</b> (Sanskrit: “life-restorer”) · the agent persona is <b>Jeeva</b>. A fork of lazarus-bio with first-class long-read, workflow, R/Bioconductor, and typed-I/O support.</p>
+    <p><a href="https://github.com/musicofthings/sanjeevini">Source on GitHub</a></p>
+  </footer>
+</main>
+
+<script>
+  (function () {
+    var btn = document.getElementById('themeToggle');
+    btn.addEventListener('click', function () {
+      var root = document.documentElement;
+      var isDark = getComputedStyle(root).getPropertyValue('--bg').trim().indexOf('#14') === 0
+        || root.getAttribute('data-theme') === 'dark';
+      root.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    });
+  })();
+</script>
+</body>
+</html>
