@@ -29,3 +29,6 @@ jeeva-output/
 .claude/session/
 .claude/*.log
 session_handover.md
+
+# CodeFerret review state
+.ferret/
