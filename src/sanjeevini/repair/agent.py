@@ -317,7 +317,9 @@ class AnthropicClient:
         self.max_tokens = max_tokens
         self._price_in = price_in_per_mtok
         self._price_out = price_out_per_mtok
-        self._client = anthropic.Anthropic()
+        # Let the SDK ride out transient rate-limit / overloaded (429/529) errors
+        # with backoff before an exception ever reaches the loop.
+        self._client = anthropic.Anthropic(max_retries=6)
 
     def __call__(self, system: str, user: str) -> tuple[str, float]:
         """Send one turn to the model and return ``(action_json, cost_usd)``.

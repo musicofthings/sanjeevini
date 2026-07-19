@@ -53,14 +53,20 @@ class FakeSandbox:
         self,
         returncodes: list[int] | None = None,
         prior: list[TurnRecord] | None = None,
+        raises: list[Exception | None] | None = None,
     ) -> None:
         self._returncodes = list(returncodes or [])
         self._prior = list(prior or [])
+        self._raises = list(raises or [])
         self.execs: list[list[str]] = []
         self.snapshots: list[str] = []
 
     def exec(self, cmd: list[str], timeout: int = 300) -> ExecResult:
         self.execs.append(list(cmd))
+        if self._raises:
+            exc = self._raises.pop(0)
+            if exc is not None:
+                raise exc
         rc = self._returncodes.pop(0) if self._returncodes else 0
         return ExecResult(returncode=rc, stdout="out", stderr="err", duration_s=0.01)
 
@@ -273,6 +279,45 @@ def test_loop_enforces_turn_limit(tmp_path: Path) -> None:
     assert outcome.verdict == "TIMEOUT"
     assert outcome.turns == 3
     assert len(sandbox.execs) == 3
+
+
+def test_loop_recovers_from_command_timeout(tmp_path: Path) -> None:
+    # A timeout on turn 1 must become a failed turn the agent can react to, not
+    # crash the run; turn 2's sanity command then passes.
+    sandbox = FakeSandbox(returncodes=[0], raises=[TimeoutError("slow"), None])
+    actions = [
+        RepairAction(kind="exec", cmd=["make"]),
+        RepairAction(kind="exec", cmd=["pytest"], is_sanity_check=True),
+    ]
+    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
+                         contracts_root=tmp_path).run()
+    assert outcome.verdict == "PASS"
+    assert outcome.turns == 2
+    assert sandbox.execs == [["make"], ["pytest"]]
+
+
+def test_loop_aborts_after_repeated_container_errors(tmp_path: Path) -> None:
+    from sanjeevini.sandbox.docker_sandbox import DockerError
+
+    sandbox = FakeSandbox(raises=[DockerError("dead"), DockerError("dead"), DockerError("dead")])
+    outcome = RepairLoop(_spec(), sandbox, InfiniteAgent(), max_turns=20,
+                         contracts_root=tmp_path).run()
+    assert outcome.verdict == "FAILED"
+    assert "unrecoverable" in outcome.reason
+    assert outcome.turns == 3
+
+
+def test_loop_survives_agent_exception(tmp_path: Path) -> None:
+    class ExplodingAgent:
+        def next_action(self, state: LoopState) -> RepairAction:
+            raise RuntimeError("boom")
+
+    outcome = RepairLoop(_spec(), FakeSandbox(), ExplodingAgent(),
+                         contracts_root=tmp_path).run()
+    assert outcome.verdict == "FAILED"
+    assert "agent call failed" in outcome.reason and "boom" in outcome.reason
+    # a contract (provenance) is still emitted rather than crashing
+    assert (tmp_path / "foo" / "PROVENANCE.json").is_file()
 
 
 def test_loop_resumes_from_prior_turns(tmp_path: Path) -> None:

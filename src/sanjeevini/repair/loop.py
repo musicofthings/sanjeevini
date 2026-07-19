@@ -62,6 +62,13 @@ from sanjeevini.scouts.workflow_scout import (
 Verdict = Literal["PASS", "TIMEOUT", "FAILED"]
 ResurrectionPlan = PythonResurrectionPlan | RResurrectionPlan | WorkflowResurrectionPlan
 
+# Consecutive unrecoverable container errors before the loop aborts (a dead
+# container can't be repaired in-place, so spinning to the turn limit is waste).
+_MAX_SANDBOX_ERRORS = 3
+# Exit codes synthesised for sandbox failures so the agent sees them as tracebacks.
+_RC_TIMEOUT = 124
+_RC_SANDBOX_ERROR = 125
+
 # Local files a Scout reads when a repo is already cloned to disk.
 _LOCAL_FETCH_PATHS = (
     "README.md",
@@ -451,6 +458,7 @@ class RepairLoop:
         verdict: Verdict | None = None
         reason = ""
         sanity_cmd: list[str] = []
+        sandbox_errors = 0
 
         while turn < self.max_turns:
             state = LoopState(
@@ -465,7 +473,14 @@ class RepairLoop:
                 patch_history=list(patch_history),
                 history=list(history),
             )
-            action = self.agent.next_action(state)
+            # A hard agent/API failure (after the agent's own retries) must not
+            # crash the run — end it gracefully so a contract is still emitted.
+            try:
+                action = self.agent.next_action(state)
+            except Exception as exc:
+                verdict = "FAILED"
+                reason = f"agent call failed: {type(exc).__name__}: {exc}"
+                break
             cost += action.cost_usd
 
             if action.kind == "give_up":
@@ -473,7 +488,7 @@ class RepairLoop:
                 reason = action.reason or "agent signalled the resurrection is unresolvable"
                 break
 
-            result = self.sandbox.exec(action.cmd, timeout=action.timeout)
+            result, container_error = self._exec(action)
             turn += 1
             history.append(
                 TurnOutcome(
@@ -485,6 +500,16 @@ class RepairLoop:
                 )
             )
             last_rc, last_out, last_err = result.returncode, result.stdout, result.stderr
+
+            # A dead container can't be repaired in place; bail after a few in a row.
+            if container_error:
+                sandbox_errors += 1
+                if sandbox_errors >= _MAX_SANDBOX_ERRORS:
+                    verdict = "FAILED"
+                    reason = "sandbox became unrecoverable (repeated container errors)"
+                    break
+            else:
+                sandbox_errors = 0
 
             if action.patch:
                 patch_history.append(action.patch)
@@ -524,6 +549,28 @@ class RepairLoop:
         )
         outcome.contract_dir = self._emit(outcome)
         return outcome
+
+    def _exec(self, action: RepairAction) -> tuple[ExecResult, bool]:
+        """Run one action, turning sandbox failures into a failed result.
+
+        A command timeout or container error is converted into a non-zero
+        :class:`ExecResult` (surfaced to the agent as the next turn's traceback)
+        instead of propagating, so the loop self-corrects rather than crashing.
+
+        Args:
+            action: The exec action to run.
+
+        Returns:
+            ``(result, container_error)`` — ``container_error`` is ``True`` only
+            for an unrecoverable container fault (not a plain timeout).
+        """
+        try:
+            return self.sandbox.exec(action.cmd, timeout=action.timeout), False
+        except TimeoutError as exc:
+            stderr = f"[command timed out after {action.timeout}s] {exc}"
+            return ExecResult(_RC_TIMEOUT, "", stderr, float(action.timeout)), False
+        except DockerError as exc:
+            return ExecResult(_RC_SANDBOX_ERROR, "", f"[sandbox error] {exc}", 0.0), True
 
     # ---- contract emission -------------------------------------------------
 
