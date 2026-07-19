@@ -32,11 +32,17 @@ Usage from Claude Code
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import subprocess
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from typing import TextIO
+
+PROTOCOL_VERSION = "2024-11-05"
+SERVER_INFO = {"name": "jeeva", "version": "0.1.0"}
 
 
 def _run_jeeva(*argv: str, timeout: int = 30) -> str:
@@ -186,7 +192,10 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "domain": {
                     "type": "string",
-                    "description": "Optional domain filter: longread, proteomics, variant-calling, etc.",
+                    "description": (
+                        "Optional domain filter: longread-ont, proteomics, "
+                        "variant-calling, etc."
+                    ),
                 },
             },
             "required": ["query"],
@@ -227,7 +236,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-async def _handle_tool_call(name: str, arguments: dict[str, Any]) -> str:
+def _handle_tool_call(name: str, arguments: dict[str, Any]) -> str:
     """Dispatch a tool call and return a JSON string result."""
 
     if name == "resurrect":
@@ -281,90 +290,87 @@ async def _handle_tool_call(name: str, arguments: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# MCP protocol (stdio transport — minimal, spec-compliant)
+# MCP protocol (stdio transport — newline-delimited JSON-RPC 2.0)
 # ---------------------------------------------------------------------------
 
-async def _stdio_server() -> None:
-    """Run the MCP server over stdio (JSON-RPC 2.0 framing)."""
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    loop = asyncio.get_event_loop()
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
 
-    writer_transport, writer_protocol = await loop.connect_write_pipe(
-        asyncio.BaseProtocol, sys.stdout.buffer
-    )
-    writer = asyncio.StreamWriter(writer_transport, writer_protocol, reader, loop)
+def dispatch(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Handle one JSON-RPC request and return the response, or ``None``.
 
-    def _send(obj: dict) -> None:
-        line = json.dumps(obj) + "\n"
-        writer.write(line.encode())
+    Notifications (no ``id``, or ``notifications/*``) return ``None`` — the
+    protocol requires no reply. Unknown methods with an ``id`` return a
+    ``-32601`` error object.
 
-    async for raw in reader:
+    Args:
+        message: A decoded JSON-RPC request object.
+
+    Returns:
+        The JSON-RPC response object, or ``None`` when no reply is due.
+    """
+    method = message.get("method", "")
+    msg_id = message.get("id")
+
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": SERVER_INFO,
+            },
+        }
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+    if method == "tools/call":
+        params = message.get("params", {})
+        content = _handle_tool_call(params.get("name", ""), params.get("arguments", {}))
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {"content": [{"type": "text", "text": content}], "isError": False},
+        }
+    if method.startswith("notifications/") or msg_id is None:
+        return None
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }
+
+
+def serve_stdio(lines: Iterable[str], out: TextIO) -> None:
+    """Run the stdio server loop over ``lines``, writing replies to ``out``.
+
+    Each input line is one JSON-RPC message (newline-delimited framing). This
+    uses ordinary blocking I/O so it works whether stdin/stdout are pipes,
+    ttys, or regular files — unlike the asyncio pipe transport.
+
+    Args:
+        lines: An iterable of input lines (typically ``sys.stdin``).
+        out: The text stream responses are written to (typically ``sys.stdout``).
+    """
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
         try:
-            msg = json.loads(raw.decode())
+            message = json.loads(line)
         except json.JSONDecodeError:
             continue
-
-        method = msg.get("method", "")
-        msg_id = msg.get("id")
-
-        if method == "initialize":
-            _send({
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "jeeva", "version": "0.1.0"},
-                },
-            })
-
-        elif method == "tools/list":
-            _send({
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {"tools": TOOLS},
-            })
-
-        elif method == "tools/call":
-            params  = msg.get("params", {})
-            name    = params.get("name", "")
-            args    = params.get("arguments", {})
-            content = await _handle_tool_call(name, args)
-            _send({
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {
-                    "content": [{"type": "text", "text": content}],
-                    "isError": False,
-                },
-            })
-
-        elif method == "notifications/initialized":
-            pass  # no response needed
-
-        else:
-            if msg_id is not None:
-                _send({
-                    "jsonrpc": "2.0", "id": msg_id,
-                    "error": {"code": -32601, "message": f"Method not found: {method}"},
-                })
-
-    await writer.drain()
+        response = dispatch(message)
+        if response is not None:
+            out.write(json.dumps(response) + "\n")
+            out.flush()
 
 
 def serve(args: argparse.Namespace) -> None:
     """Entry point called by the CLI 'jeeva mcp' subcommand."""
     if getattr(args, "host", "stdio") == "sse":
-        # SSE transport — requires mcp[sse] extra
-        try:
-            from mcp.server.sse import SseServerTransport  # type: ignore[import]
-            from mcp import Server  # type: ignore[import]
-        except ImportError:
-            print(
-                "SSE transport requires: pip install 'sanjeevini-bio[mcp]'",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        # SSE server wiring would go here
-        raise NotImplementedError("SSE transport not yet implemented")
-
-    asyncio.run(_stdio_server())
+        print(
+            "SSE transport is not implemented; use the default stdio transport "
+            "(`jeeva mcp`).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    serve_stdio(sys.stdin, sys.stdout)
