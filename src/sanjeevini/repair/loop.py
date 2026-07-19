@@ -927,6 +927,7 @@ class ResurrectCommand:
                 checkpoint_dir=checkpoint_dir,
             )
             sandbox.start()
+            sandbox.copy_in(repo_dir, self.args.workdir)  # place the checkout in the sandbox
             agent = self._build_agent(spec)
             loop = RepairLoop(spec, sandbox, agent, max_turns=self.args.turns)
             try:
@@ -939,13 +940,21 @@ class ResurrectCommand:
 
     @staticmethod
     def _clone(url: str, dest: Path) -> str:
-        """Shallow-clone ``url`` into ``dest`` and return the resolved commit."""
-        subprocess.run(  # noqa: S603 - fixed argv, no shell
+        """Shallow-clone ``url`` into ``dest`` and return the resolved commit.
+
+        Exits cleanly (status 1) rather than dumping a traceback if the clone
+        fails (e.g. the URL is wrong or the repo is private/unreachable).
+        """
+        clone = subprocess.run(  # noqa: S603 - fixed argv, no shell
             ["git", "clone", "--depth", "1", url, str(dest)],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if clone.returncode != 0:
+            tail = (clone.stderr or clone.stdout).strip().splitlines()[-1:] or ["unknown error"]
+            print(f"could not clone {url}: {tail[0]}", file=sys.stderr)
+            sys.exit(1)
         head = subprocess.run(  # noqa: S603 - fixed argv, no shell
             ["git", "-C", str(dest), "rev-parse", "HEAD"],
             check=False,
@@ -955,22 +964,21 @@ class ResurrectCommand:
         return head.stdout.strip()
 
     def _build_agent(self, spec: ResurrectionSpec) -> RepairAgent:
-        """Build the autonomous agent that plays :class:`RepairAgent`.
+        """Build the autonomous LLM agent that plays :class:`RepairAgent`.
 
-        The autonomous brain is driven by ``claude-agent-sdk`` through the MCP
-        server rather than in-process, so the ``resurrect`` subcommand hands off
-        to it there.
+        Args:
+            spec: The resurrection spec to plan against.
+
+        Returns:
+            An :class:`~sanjeevini.repair.agent.LLMRepairAgent`.
 
         Raises:
-            RuntimeError: Always, in this build — pointing the operator at the
-                MCP server (``jeeva mcp``), which wires the loop to the SDK.
+            RuntimeError: If the ``anthropic`` package (the ``[agent]`` extra) is
+                not installed.
         """
-        raise RuntimeError(
-            "the autonomous resurrection agent runs through the MCP server "
-            "(claude-agent-sdk driver): start it with `jeeva mcp` and call the "
-            "resurrect tool, or drive RepairLoop programmatically with a "
-            "ScriptedAgent."
-        )
+        from sanjeevini.repair.agent import LLMRepairAgent
+
+        return LLMRepairAgent(spec)
 
     def _report(self, outcome: RepairOutcome) -> None:
         """Print the verdict, contract directory, and smoke-test command."""

@@ -375,10 +375,16 @@ def test_decay_check_command_fail_on_decay_exits(capsys: pytest.CaptureFixture[s
 # ---- resurrect command ----------------------------------------------------
 
 
-def test_resurrect_build_agent_raises() -> None:
+def test_resurrect_build_agent_returns_llm_agent_or_needs_anthropic() -> None:
+    from sanjeevini.repair.agent import LLMRepairAgent
+
     args = argparse.Namespace(url="https://github.com/acme/foo")
-    with pytest.raises(RuntimeError, match="MCP server"):
-        ResurrectCommand(args)._build_agent(_spec())
+    try:
+        agent = ResurrectCommand(args)._build_agent(_spec())
+    except RuntimeError as exc:
+        assert "anthropic" in str(exc)  # package not installed in this env
+    else:
+        assert isinstance(agent, LLMRepairAgent)
 
 
 def test_report_prints_contract(capsys: pytest.CaptureFixture[str]) -> None:

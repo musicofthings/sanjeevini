@@ -46,8 +46,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The autonomous revive loop + Jeeva agent (Python >= 3.10, Docker required)
-agent = ["claude-agent-sdk>=0.2"]
+# The autonomous revive loop + Jeeva agent (Python >= 3.10, Docker required).
+# anthropic backs the per-turn planner; claude-agent-sdk is kept for MCP-driven use.
+agent = ["anthropic>=0.40", "claude-agent-sdk>=0.2"]
 
 # Conda/Bioconda era pinner
 conda = ["conda-package-handling>=2", "requests>=2.31"]
