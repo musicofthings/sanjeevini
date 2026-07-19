@@ -15,6 +15,10 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Secrets / local env
+.env
+.env.*
+
 # OS
 .DS_Store
 
@@ -24,6 +28,7 @@ htmlcov/
 /contracts/
 lazarus-output/
 jeeva-output/
+.jeeva/
 
 # Local tooling state (context-engineering-kit)
 .claude/session/

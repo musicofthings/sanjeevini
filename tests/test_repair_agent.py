@@ -139,6 +139,32 @@ def test_agent_next_action_uses_injected_completion() -> None:
     assert "github.com/acme/foo" in seen["user"]
 
 
+def test_agent_retries_transient_bad_reply_then_succeeds() -> None:
+    replies = iter([
+        ("not json at all", 0.0),                                  # transient garbage
+        ('{"action":"exec","cmd":["ls"]}', 0.01),                  # good on retry
+    ])
+
+    def flaky_complete(system: str, user: str) -> tuple[str, float]:
+        return next(replies)
+
+    action = LLMRepairAgent(_spec(), complete=flaky_complete).next_action(_state())
+    assert action.kind == "exec"
+    assert action.cmd == ["ls"]
+
+
+def test_agent_honours_real_give_up_without_retrying() -> None:
+    calls = {"n": 0}
+
+    def complete(system: str, user: str) -> tuple[str, float]:
+        calls["n"] += 1
+        return '{"action":"give_up","reason":"host lacks AVX"}', 0.0
+
+    action = LLMRepairAgent(_spec(), complete=complete).next_action(_state())
+    assert action.kind == "give_up"
+    assert calls["n"] == 1  # a deliberate give_up is not retried
+
+
 def test_agent_model_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("JEEVA_MODEL", raising=False)
     agent = LLMRepairAgent(_spec(), complete=lambda _s, _u: ("{}", 0.0))

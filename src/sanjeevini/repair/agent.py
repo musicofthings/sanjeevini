@@ -37,6 +37,34 @@ Completion = Callable[[str, str], "tuple[str, float]"]
 
 DEFAULT_MODEL = "claude-sonnet-5"
 
+# How many times to re-ask when a reply is malformed/empty before giving up.
+_MAX_REPLY_ATTEMPTS = 3
+
+# Forced structured-output tool: the model must call this with a valid action,
+# so the reply is always schema-valid JSON rather than free text we hope parses.
+_ACTION_TOOL = {
+    "name": "next_action",
+    "description": "Choose the single next action for the resurrection loop.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["exec", "give_up"]},
+            "cmd": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "argv to run in the sandbox (required for exec).",
+            },
+            "is_sanity_check": {"type": "boolean"},
+            "patch": {"type": "string"},
+            "bug_class": {"type": "string"},
+            "bug_description": {"type": "string"},
+            "reason": {"type": "string"},
+            "timeout": {"type": "integer"},
+        },
+        "required": ["action"],
+    },
+}
+
 RESURRECTION_SYSTEM_PROMPT = """\
 You are Jeeva: you resurrect dead research code and make a buried capability
 callable, then PROVE it runs on a fresh input.
@@ -145,6 +173,12 @@ def _first_line(text: str) -> str:
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# Give-up reasons that signal a malformed/empty model reply (retry), as opposed
+# to the model deliberately choosing to give up (honour immediately).
+_REASON_NO_JSON = "model reply was not valid JSON"
+_REASON_NO_CMD = "model returned an exec action with no command"
+_RETRYABLE_REASONS = frozenset({_REASON_NO_JSON, _REASON_NO_CMD})
+
 
 def parse_action(text: str) -> RepairAction:
     """Parse a model reply into a :class:`RepairAction`.
@@ -161,7 +195,7 @@ def parse_action(text: str) -> RepairAction:
     """
     data = _extract_json(text)
     if data is None:
-        return RepairAction(kind="give_up", reason="model reply was not valid JSON")
+        return RepairAction(kind="give_up", reason=_REASON_NO_JSON)
 
     action = data.get("action") or ("give_up" if data.get("reason") else "exec")
     if action == "give_up":
@@ -169,7 +203,7 @@ def parse_action(text: str) -> RepairAction:
 
     cmd = _coerce_cmd(data.get("cmd"))
     if not cmd:
-        return RepairAction(kind="give_up", reason="model returned an exec action with no command")
+        return RepairAction(kind="give_up", reason=_REASON_NO_CMD)
 
     patch = data.get("patch")
     timeout = data.get("timeout", 300)
@@ -232,11 +266,21 @@ class LLMRepairAgent:
         self._complete = complete or AnthropicClient(self.model)
 
     def next_action(self, state: LoopState) -> RepairAction:
-        """Ask the model for the next action given ``state``."""
+        """Ask the model for the next action given ``state``.
+
+        Retries a malformed or empty reply a few times (a transient hiccup must
+        not end the whole resurrection); a deliberate ``give_up`` from the model
+        is honoured immediately.
+        """
         user = render_state(self.spec, state)
-        text, cost = self._complete(RESURRECTION_SYSTEM_PROMPT, user)
-        action = parse_action(text)
-        action.cost_usd = cost
+        action = RepairAction(kind="give_up", reason=_REASON_NO_JSON)
+        for attempt in range(_MAX_REPLY_ATTEMPTS):
+            nudge = "" if attempt == 0 else "\n\nReturn exactly one next_action now."
+            text, cost = self._complete(RESURRECTION_SYSTEM_PROMPT, user + nudge)
+            action = parse_action(text)
+            action.cost_usd = cost
+            if not (action.kind == "give_up" and action.reason in _RETRYABLE_REASONS):
+                return action
         return action
 
 
@@ -247,7 +291,7 @@ class AnthropicClient:
         self,
         model: str = DEFAULT_MODEL,
         *,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         price_in_per_mtok: float | None = None,
         price_out_per_mtok: float | None = None,
     ) -> None:
@@ -276,13 +320,24 @@ class AnthropicClient:
         self._client = anthropic.Anthropic()
 
     def __call__(self, system: str, user: str) -> tuple[str, float]:
-        """Send one turn to the model and return ``(reply_text, cost_usd)``."""
-        response = self._client.messages.create(
+        """Send one turn to the model and return ``(action_json, cost_usd)``.
+
+        Forces the model to call the ``next_action`` tool, so the returned text is
+        always the schema-valid action serialised as JSON (never free-form prose
+        we have to hope parses).
+        """
+        response = self._client.messages.create(  # type: ignore[call-overload]
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
+            tools=[_ACTION_TOOL],
+            tool_choice={"type": "tool", "name": "next_action"},
         )
+        for block in response.content:
+            if getattr(block, "type", "") == "tool_use" and block.name == "next_action":
+                return json.dumps(block.input), self._cost(response)
+        # Fallback: no tool call (unexpected under forced tool_choice) — return any text.
         text = "".join(
             block.text for block in response.content if getattr(block, "type", "") == "text"
         )
