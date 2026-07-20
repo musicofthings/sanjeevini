@@ -140,10 +140,12 @@ def test_agent_next_action_uses_injected_completion() -> None:
 
 
 def test_agent_retries_transient_bad_reply_then_succeeds() -> None:
-    replies = iter([
-        ("not json at all", 0.0),                                  # transient garbage
-        ('{"action":"exec","cmd":["ls"]}', 0.01),                  # good on retry
-    ])
+    replies = iter(
+        [
+            ("not json at all", 0.0),  # transient garbage
+            ('{"action":"exec","cmd":["ls"]}', 0.01),  # good on retry
+        ]
+    )
 
     def flaky_complete(system: str, user: str) -> tuple[str, float]:
         return next(replies)

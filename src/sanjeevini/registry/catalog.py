@@ -203,9 +203,7 @@ def find_bundle_dir(slug: str, registry_dirs: list[Path]) -> Path | None:
     return None
 
 
-def pull_contract(
-    slug: str, dest: Path, *, registry_dirs: list[Path] | None = None
-) -> Path:
+def pull_contract(slug: str, dest: Path, *, registry_dirs: list[Path] | None = None) -> Path:
     """Copy a tool's contract bundle into ``dest/{slug}/``.
 
     Args:
@@ -270,8 +268,10 @@ class RegistryCommand:
             print(json.dumps([e.to_dict() for e in entries], indent=2))
             return
         if not entries:
-            print("no tools in the registry (looked in: "
-                  f"{', '.join(str(d) for d in default_registry_dirs()) or 'contracts, registry'})")
+            print(
+                "no tools in the registry (looked in: "
+                f"{', '.join(str(d) for d in default_registry_dirs()) or 'contracts, registry'})"
+            )
             return
         for e in entries:
             verified = f" · verified {e.last_verified}" if e.last_verified else ""

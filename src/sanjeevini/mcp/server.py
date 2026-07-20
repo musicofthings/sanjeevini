@@ -60,10 +60,12 @@ def _run_jeeva(*argv: str, timeout: int = 30) -> str:
             timeout=timeout,
         )
         if result.returncode != 0:
-            return json.dumps({
-                "error": result.stderr.strip() or "non-zero exit",
-                "stdout": result.stdout.strip(),
-            })
+            return json.dumps(
+                {
+                    "error": result.stderr.strip() or "non-zero exit",
+                    "stdout": result.stdout.strip(),
+                }
+            )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
         return json.dumps({"error": f"jeeva timed out after {timeout}s"})
@@ -193,8 +195,7 @@ TOOLS: list[dict[str, Any]] = [
                 "domain": {
                     "type": "string",
                     "description": (
-                        "Optional domain filter: longread-ont, proteomics, "
-                        "variant-calling, etc."
+                        "Optional domain filter: longread-ont, proteomics, variant-calling, etc."
                     ),
                 },
             },
@@ -264,13 +265,17 @@ def _handle_tool_call(name: str, arguments: dict[str, Any]) -> str:
         return _run_jeeva(*argv, timeout=120)
 
     if name == "decay_check":
-        argv = ["decay-check", arguments["url"], "--json",
-                "--sandbox", arguments.get("sandbox", "docker")]
+        argv = [
+            "decay-check",
+            arguments["url"],
+            "--json",
+            "--sandbox",
+            arguments.get("sandbox", "docker"),
+        ]
         return _run_jeeva(*argv, timeout=600)
 
     if name == "registry_search":
-        argv = ["registry", "search", arguments["query"],
-                "--top", str(arguments.get("top", 5))]
+        argv = ["registry", "search", arguments["query"], "--top", str(arguments.get("top", 5))]
         if arguments.get("domain"):
             argv += ["--domain", arguments["domain"]]
         return _run_jeeva(*argv, timeout=30)
@@ -368,8 +373,7 @@ def serve(args: argparse.Namespace) -> None:
     """Entry point called by the CLI 'jeeva mcp' subcommand."""
     if getattr(args, "host", "stdio") == "sse":
         print(
-            "SSE transport is not implemented; use the default stdio transport "
-            "(`jeeva mcp`).",
+            "SSE transport is not implemented; use the default stdio transport (`jeeva mcp`).",
             file=sys.stderr,
         )
         sys.exit(1)

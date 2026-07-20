@@ -211,9 +211,7 @@ class DockerSandbox:
         """Extra env for subprocess calls (sets ``DOCKER_HOST`` when remote)."""
         return {"DOCKER_HOST": self.docker_host} if self.docker_host else None
 
-    def _docker(
-        self, args: Sequence[str], *, timeout: float | None = None
-    ) -> tuple[int, str, str]:
+    def _docker(self, args: Sequence[str], *, timeout: float | None = None) -> tuple[int, str, str]:
         """Run a raw ``docker`` subcommand and return ``(code, out, err)``."""
         argv = [self.binary, *args]
         return self._runner(argv, timeout=timeout, env=self._env)
@@ -300,9 +298,7 @@ class DockerSandbox:
         silently ignored — this is a best-effort courtesy, not a gate.
         """
         try:
-            code, out, _ = self._docker(
-                ["exec", self.name, "bash", "-lc", "echo $CUDA_VERSION"]
-            )
+            code, out, _ = self._docker(["exec", self.name, "bash", "-lc", "echo $CUDA_VERSION"])
             image_cuda = out.strip() if code == 0 else ""
             if not image_cuda:
                 return
@@ -367,9 +363,7 @@ class DockerSandbox:
         try:
             code, out, err = self._docker(args, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(
-                f"command timed out after {timeout}s: {' '.join(cmd)}"
-            ) from exc
+            raise TimeoutError(f"command timed out after {timeout}s: {' '.join(cmd)}") from exc
         result = ExecResult(
             returncode=code,
             stdout=out,

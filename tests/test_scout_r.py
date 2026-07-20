@@ -117,9 +117,9 @@ async def test_plan_cran_uses_rver_image() -> None:
 
 
 async def test_plan_new_bioc_falls_back_to_rver() -> None:
-    plan = await RScout(
-        "https://github.com/acme/rpkg", snapshot=_snap(_BIOC_320_DESCRIPTION)
-    ).plan(confirm=False)
+    plan = await RScout("https://github.com/acme/rpkg", snapshot=_snap(_BIOC_320_DESCRIPTION)).plan(
+        confirm=False
+    )
     assert plan.bioc_release == "3.21"
     assert plan.base_image == "rocker/r-ver:4.5"
 

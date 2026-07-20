@@ -119,7 +119,8 @@ def test_entry_to_dict_and_search_text(sample_registry: Path) -> None:
 
 def test_pull_contract_copies_contract_and_dockerfile(tmp_path: Path) -> None:
     d = _write_bundle(
-        tmp_path / "reg", "sniffles2",
+        tmp_path / "reg",
+        "sniffles2",
         {"slug": "sniffles2", "name": "Sniffles2", "schema": _schema_dict()},
     )
     (d / "Dockerfile").write_text("FROM ubuntu:22.04\n")
@@ -146,7 +147,8 @@ def test_find_bundle_dir(sample_registry: Path) -> None:
 
 def _chdir_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = _write_bundle(
-        tmp_path / "contracts", "sniffles2",
+        tmp_path / "contracts",
+        "sniffles2",
         {
             "slug": "sniffles2",
             "name": "Sniffles2",
@@ -180,9 +182,7 @@ def test_registry_command_list_json_and_filter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _chdir_registry(tmp_path, monkeypatch)
-    args = argparse.Namespace(
-        registry_cmd="list", domain="methylation", platform=None, json=True
-    )
+    args = argparse.Namespace(registry_cmd="list", domain="methylation", platform=None, json=True)
     RegistryCommand(args).run()
     assert json.loads(capsys.readouterr().out) == []  # filtered out
 

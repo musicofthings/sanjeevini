@@ -27,6 +27,7 @@ import shlex
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from sanjeevini.repair.knowledge import KnowledgeStore, Lesson
 from sanjeevini.repair.loop import RepairAction
 
 if TYPE_CHECKING:
@@ -115,12 +116,16 @@ Repair heuristics:
 """
 
 
-def render_state(spec: ResurrectionSpec, state: LoopState) -> str:
+def render_state(
+    spec: ResurrectionSpec, state: LoopState, lessons: list[Lesson] | None = None
+) -> str:
     """Render the loop state into the user prompt for one turn.
 
     Args:
         spec: The resurrection spec (goal, sanity check, repo, base image).
         state: The current loop state (last result, patch history, recent turns).
+        lessons: Relevant fixes learned in earlier resurrections, injected as
+            hints so each run starts smarter than the last.
 
     Returns:
         The prompt text handed to the model.
@@ -143,6 +148,13 @@ def render_state(spec: ResurrectionSpec, state: LoopState) -> str:
         stdout = state.last_stdout.strip()
         if stdout:
             lines.append("Last stdout (tail):\n" + _tail(stdout, 800))
+
+    if lessons:
+        lines.append(
+            "\nPrior experience from earlier resurrections (fixes that worked on "
+            "similar errors — treat as hints, verify before trusting):"
+        )
+        lines.extend(f"  - {lesson.as_hint()}" for lesson in lessons)
 
     if state.patch_history:
         lines.append("\nPatches applied so far:")
@@ -251,6 +263,7 @@ class LLMRepairAgent:
         *,
         complete: Completion | None = None,
         model: str | None = None,
+        knowledge: KnowledgeStore | None = None,
     ) -> None:
         """Configure the agent.
 
@@ -260,10 +273,13 @@ class LLMRepairAgent:
                 defaults to an Anthropic-backed client.
             model: Model id override (defaults to ``$JEEVA_MODEL`` or
                 :data:`DEFAULT_MODEL`).
+            knowledge: Store of lessons from earlier runs; relevant ones are
+                injected into each turn's prompt. ``None`` disables retrieval.
         """
         self.spec = spec
         self.model = model or os.environ.get("JEEVA_MODEL", DEFAULT_MODEL)
         self._complete = complete or AnthropicClient(self.model)
+        self._knowledge = knowledge
 
     def next_action(self, state: LoopState) -> RepairAction:
         """Ask the model for the next action given ``state``.
@@ -272,7 +288,7 @@ class LLMRepairAgent:
         not end the whole resurrection); a deliberate ``give_up`` from the model
         is honoured immediately.
         """
-        user = render_state(self.spec, state)
+        user = render_state(self.spec, state, self._lessons_for(state))
         action = RepairAction(kind="give_up", reason=_REASON_NO_JSON)
         for attempt in range(_MAX_REPLY_ATTEMPTS):
             nudge = "" if attempt == 0 else "\n\nReturn exactly one next_action now."
@@ -282,6 +298,16 @@ class LLMRepairAgent:
             if not (action.kind == "give_up" and action.reason in _RETRYABLE_REASONS):
                 return action
         return action
+
+    def _lessons_for(self, state: LoopState) -> list[Lesson]:
+        """Return prior lessons relevant to the traceback the agent is facing."""
+        if self._knowledge is None:
+            return []
+        return self._knowledge.relevant(
+            framework=self.spec.framework,
+            error_text=state.last_stderr,
+            top_k=4,
+        )
 
 
 class AnthropicClient:

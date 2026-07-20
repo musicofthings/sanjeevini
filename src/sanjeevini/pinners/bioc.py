@@ -166,9 +166,7 @@ def fetch_views(
     return parse_views(text)
 
 
-def _build_install_script(
-    bioc_version: str, package_versions: list[tuple[str, str]]
-) -> str:
+def _build_install_script(bioc_version: str, package_versions: list[tuple[str, str]]) -> str:
     """Render an R install script for a release and its resolved packages."""
     found = [pkg for pkg, ver in package_versions if ver != "NOT_IN_BIOC"]
     missing = [pkg for pkg, ver in package_versions if ver == "NOT_IN_BIOC"]
@@ -181,9 +179,7 @@ def _build_install_script(
         pkg_vec = ", ".join(f'"{p}"' for p in found)
         lines.append(f"BiocManager::install(c({pkg_vec}))")
     for pkg in missing:
-        lines.append(
-            f'install.packages("{pkg}")  # not in Bioc {bioc_version}; CRAN fallback'
-        )
+        lines.append(f'install.packages("{pkg}")  # not in Bioc {bioc_version}; CRAN fallback')
     return "\n".join(lines) + "\n"
 
 

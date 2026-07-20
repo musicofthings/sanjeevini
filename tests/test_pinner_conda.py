@@ -53,11 +53,15 @@ def _samtools_repodata() -> dict:
     return {
         "packages": {
             "samtools-1.12-h9aed4be_1.tar.bz2": {
-                "name": "samtools", "version": "1.12", "build": "h9aed4be_1",
+                "name": "samtools",
+                "version": "1.12",
+                "build": "h9aed4be_1",
                 "timestamp": _ms(2021, 3, 25),
             },
             "samtools-1.13-h8c37831_0.tar.bz2": {
-                "name": "samtools", "version": "1.13", "build": "h8c37831_0",
+                "name": "samtools",
+                "version": "1.13",
+                "build": "h8c37831_0",
                 "timestamp": _ms(2021, 7, 19),
             },
         }
@@ -81,7 +85,9 @@ def test_select_conda_build_reads_packages_conda_section() -> None:
     repodata = {
         "packages.conda": {
             "minimap2-2.24-h7132678_1.conda": {
-                "name": "minimap2", "version": "2.24", "build": "h7132678_1",
+                "name": "minimap2",
+                "version": "2.24",
+                "build": "h7132678_1",
                 "timestamp": _ms(2022, 1, 15),
             }
         }
@@ -94,9 +100,7 @@ def test_select_conda_build_reads_packages_conda_section() -> None:
 
 def test_pin_bioconda_package(tmp_path: Path) -> None:
     client = FakeClient({_url("bioconda"): _samtools_repodata()})
-    result = pin_conda(
-        ["samtools"], dt.date(2021, 6, 1), cache_dir=tmp_path, client=client
-    )
+    result = pin_conda(["samtools"], dt.date(2021, 6, 1), cache_dir=tmp_path, client=client)
     pkg, version, channel = result[0]
     assert pkg == "samtools"
     assert version in ("1.12", "1.13")
@@ -107,7 +111,9 @@ def test_pin_conda_forge_fallback(tmp_path: Path) -> None:
     forge = {
         "packages": {
             "scipy-1.7.0-py39_0.tar.bz2": {
-                "name": "scipy", "version": "1.7.0", "build": "py39_0",
+                "name": "scipy",
+                "version": "1.7.0",
+                "build": "py39_0",
                 "timestamp": _ms(2021, 6, 20),
             }
         }
@@ -123,14 +129,20 @@ def test_channel_order_prefers_bioconda(tmp_path: Path) -> None:
     shared_bioconda = {
         "packages": {
             "shared-1.0-0.tar.bz2": {
-                "name": "shared", "version": "1.0", "build": "0", "timestamp": _ms(2021, 1, 1),
+                "name": "shared",
+                "version": "1.0",
+                "build": "0",
+                "timestamp": _ms(2021, 1, 1),
             }
         }
     }
     shared_forge = {
         "packages": {
             "shared-2.0-0.tar.bz2": {
-                "name": "shared", "version": "2.0", "build": "0", "timestamp": _ms(2021, 1, 1),
+                "name": "shared",
+                "version": "2.0",
+                "build": "0",
+                "timestamp": _ms(2021, 1, 1),
             }
         }
     }

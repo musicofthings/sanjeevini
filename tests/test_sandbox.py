@@ -324,9 +324,7 @@ def test_snapshot() -> None:
         assert box.exec(["true"]).ok
         image = box.snapshot("sanjeevini-test/snap:latest")
     # image is inspectable == it exists locally
-    proc = subprocess.run(
-        ["docker", "image", "inspect", image], capture_output=True, check=False
-    )
+    proc = subprocess.run(["docker", "image", "inspect", image], capture_output=True, check=False)
     subprocess.run(["docker", "image", "rm", "-f", image], capture_output=True, check=False)
     assert proc.returncode == 0
 

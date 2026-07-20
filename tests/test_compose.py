@@ -133,8 +133,11 @@ def test_compose_command_dry_run_pass(
     pipeline_path = _EXAMPLES / "ont_sv_calling.yaml"
     monkeypatch.chdir(tmp_path)  # no ./contracts or ./registry here → no schemas
     args = argparse.Namespace(
-        pipeline=str(pipeline_path), registry=None, input=None,
-        docker_host=None, dry_run=True,
+        pipeline=str(pipeline_path),
+        registry=None,
+        input=None,
+        docker_host=None,
+        dry_run=True,
     )
     ComposeCommand(args).run()  # must not raise / must exit 0
     assert "PASS" in capsys.readouterr().out

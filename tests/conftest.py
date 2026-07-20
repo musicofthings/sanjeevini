@@ -58,9 +58,7 @@ def mock_httpx(monkeypatch):
 
         def raise_for_status(self) -> None:
             if self.status_code >= 400:
-                raise httpx.HTTPStatusError(
-                    f"HTTP {self.status_code}", request=None, response=None
-                )
+                raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=None, response=None)
 
     def _fake_get(self, url, *args, **kwargs):  # noqa: ANN001 - matches httpx signature
         status, payload = responses.get(str(url), (404, {}))

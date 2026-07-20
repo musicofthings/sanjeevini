@@ -100,9 +100,7 @@ def parse_depends(fields: dict[str, str]) -> tuple[str | None, list[str]]:
         constraint is declared; ``depends`` excludes R itself and drops version
         constraints.
     """
-    combined = ", ".join(
-        v for k, v in fields.items() if k in ("Depends", "Imports") and v
-    )
+    combined = ", ".join(v for k, v in fields.items() if k in ("Depends", "Imports") and v)
     r_match = _R_DEP_RE.search(combined)
     r_version = r_match.group(1) if r_match else None
 
@@ -263,10 +261,7 @@ class RScout:
             else " and the first example in the man pages runs without error and "
             "returns a non-empty value"
         )
-        return (
-            f"`R CMD check` reports 0 ERRORs; `library({package_name})` loads"
-            f"{extra}."
-        )
+        return f"`R CMD check` reports 0 ERRORs; `library({package_name})` loads{extra}."
 
     def _confirm(self, plan: RResurrectionPlan) -> None:
         """Print the plan and pause for user acknowledgement."""

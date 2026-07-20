@@ -28,9 +28,7 @@ if TYPE_CHECKING:
 def _add_resurrect(sub: SubParsers) -> None:
     p = sub.add_parser("resurrect", help="Revive a dead research repo from a GitHub URL.")
     p.add_argument("url", help="GitHub URL of the target repo.")
-    p.add_argument(
-        "--image", help="Override the base Docker image (skips Scout image selection)."
-    )
+    p.add_argument("--image", help="Override the base Docker image (skips Scout image selection).")
     p.add_argument(
         "--goal-file", metavar="FILE", help="Override Scout goal with a local text file."
     )
@@ -176,33 +174,41 @@ def main(argv: list[str] | None = None) -> None:
     # Dispatch — each module is imported lazily so startup stays fast.
     if args.command == "resurrect":
         from sanjeevini.repair.loop import ResurrectCommand
+
         ResurrectCommand(args).run()
 
     elif args.command == "pin":
         if args.conda:
             from sanjeevini.pinners.conda import CondaPinner
+
             CondaPinner(args).run()
         elif args.bioc:
             from sanjeevini.pinners.bioc import BiocPinner
+
             BiocPinner(args).run()
         else:
             from sanjeevini.pinners.pypi import PyPIPinner
+
             PyPIPinner(args).run()
 
     elif args.command == "run":
         from sanjeevini.compose.pipeline import ComposeCommand
+
         ComposeCommand(args).run()
 
     elif args.command == "registry":
         from sanjeevini.registry.catalog import RegistryCommand
+
         RegistryCommand(args).run()
 
     elif args.command == "decay-check":
         from sanjeevini.repair.loop import DecayCheckCommand
+
         DecayCheckCommand(args).run()
 
     elif args.command == "mcp":
         from sanjeevini.mcp.server import serve
+
         serve(args)
 
     else:

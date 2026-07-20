@@ -135,9 +135,7 @@ class RegistrySearchEngine:
         )
         return ranked[:top_k]
 
-    def _lexical_scores(
-        self, query: str, candidates: list[int]
-    ) -> list[tuple[int, float]]:
+    def _lexical_scores(self, query: str, candidates: list[int]) -> list[tuple[int, float]]:
         """Score candidates by set-cosine overlap of query and entry tokens."""
         q_tokens = set(_tokenize(query))
         if not q_tokens:
@@ -159,10 +157,7 @@ class RegistrySearchEngine:
         """Score candidates by cosine similarity of embeddings."""
         if self._model is None or not self._embeddings:
             return [(i, 0.0) for i in candidates]
-        q_vec = [
-            float(x)
-            for x in self._model.encode([query], normalize_embeddings=True)[0]
-        ]
+        q_vec = [float(x) for x in self._model.encode([query], normalize_embeddings=True)[0]]
         results: list[tuple[int, float]] = []
         for i in candidates:
             emb = self._embeddings[i]

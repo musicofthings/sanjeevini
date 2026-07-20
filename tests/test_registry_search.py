@@ -30,12 +30,16 @@ def _entry(slug: str, domain: str, platform: str, capability: str) -> RegistryEn
 
 def _catalog() -> list[RegistryEntry]:
     return [
-        _entry("sniffles2", "longread-ont", "ont",
-               "structural variant SV caller for ONT long reads"),
-        _entry("pbsv", "longread-pacbio", "pacbio_hifi",
-               "structural variant caller for PacBio HiFi reads"),
-        _entry("deseq2", "rna-seq", "illumina",
-               "differential gene expression from RNA-seq counts"),
+        _entry(
+            "sniffles2", "longread-ont", "ont", "structural variant SV caller for ONT long reads"
+        ),
+        _entry(
+            "pbsv",
+            "longread-pacbio",
+            "pacbio_hifi",
+            "structural variant caller for PacBio HiFi reads",
+        ),
+        _entry("deseq2", "rna-seq", "illumina", "differential gene expression from RNA-seq counts"),
     ]
 
 

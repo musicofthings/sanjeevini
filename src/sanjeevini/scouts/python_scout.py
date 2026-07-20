@@ -141,18 +141,18 @@ _DEFAULT_TURNS = {
 
 # Output-type keyword -> falsifiable structural sanity check.
 _OUTPUT_CHECKS: list[tuple[str, str]] = [
-    (GenomicFileType.VCF.value,
-     "the VCF output parses with `bcftools stats` and contains ≥ 1 variant record"),
-    (GenomicFileType.BAM.value,
-     "the BAM output passes `samtools quickcheck` and contains ≥ 1 alignment"),
-    (GenomicFileType.FASTA.value,
-     "the FASTA output is valid and contains ≥ 1 sequence"),
-    ("sequence",
-     "the tool emits ≥ 100 output sequences and each is non-empty"),
-    ("structure",
-     "the output structure file is valid and contains ≥ 1 model with coordinates"),
-    ("pdb",
-     "the output PDB file is valid and contains ≥ 1 model with atomic coordinates"),
+    (
+        GenomicFileType.VCF.value,
+        "the VCF output parses with `bcftools stats` and contains ≥ 1 variant record",
+    ),
+    (
+        GenomicFileType.BAM.value,
+        "the BAM output passes `samtools quickcheck` and contains ≥ 1 alignment",
+    ),
+    (GenomicFileType.FASTA.value, "the FASTA output is valid and contains ≥ 1 sequence"),
+    ("sequence", "the tool emits ≥ 100 output sequences and each is non-empty"),
+    ("structure", "the output structure file is valid and contains ≥ 1 model with coordinates"),
+    ("pdb", "the output PDB file is valid and contains ≥ 1 model with atomic coordinates"),
 ]
 
 
@@ -207,9 +207,7 @@ def detect_python_version(deps_text: str, framework: str) -> str:
     return _DEFAULT_PY.get(framework, "3.10")
 
 
-def select_base_image(
-    framework: str, python_version: str, deps_text: str, dockerfile: str
-) -> str:
+def select_base_image(framework: str, python_version: str, deps_text: str, dockerfile: str) -> str:
     """Select a base Docker image via the Scout's heuristics.
 
     A repo's own Dockerfile ``FROM`` line wins; otherwise the framework dictates
@@ -286,9 +284,7 @@ def generate_sanity_check(snapshot: RepoSnapshot) -> str:
     Returns:
         A falsifiable sanity-check string.
     """
-    corpus = "\n".join(
-        [snapshot.get("README.md", "README.rst"), snapshot.paper_abstract]
-    )
+    corpus = "\n".join([snapshot.get("README.md", "README.rst"), snapshot.paper_abstract])
     bench = _BENCH_RE.search(corpus)
     if bench:
         metric, value = bench.group(1), bench.group(2)
@@ -377,9 +373,7 @@ class PythonScout:
         capability = _extract_capability(readme, snapshot.name)
         sanity_check = generate_sanity_check(snapshot)
         known_issues = self._collect_known_issues(snapshot, readme)
-        estimated_turns = min(
-            _DEFAULT_TURNS.get(framework, 12) + 2 * len(known_issues), 60
-        )
+        estimated_turns = min(_DEFAULT_TURNS.get(framework, 12) + 2 * len(known_issues), 60)
         goal = (
             f"Resurrect {snapshot.owner}/{snapshot.name} "
             f"({framework}, Python {python_version}). {capability} "
@@ -407,8 +401,12 @@ class PythonScout:
         issues = [title.strip() for title, _ in snapshot.open_issues if title.strip()]
         for raw in readme.splitlines():
             line = raw.strip()
-            if re.search(r"\b(deprecat|no longer maintained|unmaintained|broken|"
-                         r"does not work|warning:)\b", line, re.IGNORECASE):
+            if re.search(
+                r"\b(deprecat|no longer maintained|unmaintained|broken|"
+                r"does not work|warning:)\b",
+                line,
+                re.IGNORECASE,
+            ):
                 issues.append(line[:200])
         return issues
 

@@ -233,14 +233,14 @@ class CondaPinner:
         channels = getattr(self.args, "channel", None)
         results = pin_conda(self.args.packages, date, channels=channels)
         if getattr(self.args, "json", False):
-            payload = [
-                {"package": p, "version": v, "channel": c} for p, v, c in results
-            ]
+            payload = [{"package": p, "version": v, "channel": c} for p, v, c in results]
             print(json.dumps(payload, indent=2))
             return
         for pkg, version, channel in results:
             if version == "NOT_FOUND":
-                print(f"# {pkg}: NOT_FOUND in {', '.join(DEFAULT_CHANNELS)} as of {date}",
-                      file=sys.stderr)
+                print(
+                    f"# {pkg}: NOT_FOUND in {', '.join(DEFAULT_CHANNELS)} as of {date}",
+                    file=sys.stderr,
+                )
                 continue
             print(f"conda install -c {channel} {pkg}={version}")

@@ -34,16 +34,16 @@ WorkflowLanguage = Literal["nextflow", "snakemake", "wdl", "cwl", "unknown"]
 
 # Files whose presence strongly indicate a workflow language
 _SIGNATURES: list[tuple[str, WorkflowLanguage]] = [
-    ("main.nf",      "nextflow"),
+    ("main.nf", "nextflow"),
     ("nextflow.config", "nextflow"),
-    ("Snakefile",    "snakemake"),
+    ("Snakefile", "snakemake"),
     ("workflow/Snakefile", "snakemake"),
     ("workflow.cwl", "cwl"),
-    ("main.cwl",     "cwl"),
+    ("main.cwl", "cwl"),
 ]
 # For WDL we scan for *.wdl rather than a fixed filename
 _WDL_GLOB = "*.wdl"
-_NF_GLOB  = "*.nf"
+_NF_GLOB = "*.nf"
 
 
 def detect_workflow_language(repo_root: Path) -> WorkflowLanguage:
@@ -62,6 +62,7 @@ def detect_workflow_language(repo_root: Path) -> WorkflowLanguage:
 # Nextflow-specific analysis
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class NextflowProfile:
     name: str
@@ -73,25 +74,25 @@ class NextflowProfile:
 @dataclass
 class NextflowAnalysis:
     dsl_version: Literal[1, 2, "unknown"] = "unknown"
-    min_nextflow_version: str | None = None   # e.g. "23.04.0"
+    min_nextflow_version: str | None = None  # e.g. "23.04.0"
     main_nf: Path | None = None
     config_files: list[Path] = field(default_factory=list)
     profiles: list[NextflowProfile] = field(default_factory=list)
     nfcore_pipeline: bool = False
-    nfcore_name: str | None = None            # e.g. "sarek"
-    nfcore_revision: str | None = None        # e.g. "3.3.2"
+    nfcore_name: str | None = None  # e.g. "sarek"
+    nfcore_revision: str | None = None  # e.g. "3.3.2"
     # Containers referenced at the process level (outside profiles)
     process_containers: dict[str, str] = field(default_factory=dict)
     params: dict[str, str] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
 
 
-_DSL2_RE   = re.compile(r"nextflow\s*\.\s*enable\s*\.\s*dsl\s*=\s*2", re.IGNORECASE)
-_DSL1_RE   = re.compile(r"nextflow\s*\.\s*enable\s*\.\s*dsl\s*=\s*1", re.IGNORECASE)
-_NFVER_RE  = re.compile(r"nextflowVersion\s*[=!><]+\s*['\"]?([0-9][^\s'\"]+)['\"]?", re.IGNORECASE)
+_DSL2_RE = re.compile(r"nextflow\s*\.\s*enable\s*\.\s*dsl\s*=\s*2", re.IGNORECASE)
+_DSL1_RE = re.compile(r"nextflow\s*\.\s*enable\s*\.\s*dsl\s*=\s*1", re.IGNORECASE)
+_NFVER_RE = re.compile(r"nextflowVersion\s*[=!><]+\s*['\"]?([0-9][^\s'\"]+)['\"]?", re.IGNORECASE)
 _CONTAINER_RE = re.compile(r"""container\s+['"]([^'"]+)['"]""")
-_PROFILE_RE   = re.compile(r"profiles\s*\{", re.IGNORECASE)
-_NFCORE_META  = re.compile(r"nf-core/([a-z0-9_-]+)", re.IGNORECASE)
+_PROFILE_RE = re.compile(r"profiles\s*\{", re.IGNORECASE)
+_NFCORE_META = re.compile(r"nf-core/([a-z0-9_-]+)", re.IGNORECASE)
 
 
 def analyse_nextflow(repo_root: Path) -> NextflowAnalysis:
@@ -164,6 +165,7 @@ def analyse_nextflow(repo_root: Path) -> NextflowAnalysis:
 # Snakemake analysis
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SnakemakeAnalysis:
     snakefile: Path | None = None
@@ -175,9 +177,9 @@ class SnakemakeAnalysis:
     issues: list[str] = field(default_factory=list)
 
 
-_SM_VERSION_RE  = re.compile(r'min_version\s*\(\s*["\']([0-9][^"\']+)["\']', re.IGNORECASE)
+_SM_VERSION_RE = re.compile(r'min_version\s*\(\s*["\']([0-9][^"\']+)["\']', re.IGNORECASE)
 _SINGULARITY_RE = re.compile(r'singularity:\s*["\']([^"\']+)["\']')
-_DOCKER_RE      = re.compile(r'container:\s*["\']docker://([^"\']+)["\']')
+_DOCKER_RE = re.compile(r'container:\s*["\']docker://([^"\']+)["\']')
 
 
 def analyse_snakemake(repo_root: Path) -> SnakemakeAnalysis:
@@ -216,6 +218,7 @@ def analyse_snakemake(repo_root: Path) -> SnakemakeAnalysis:
 # WDL / CWL (lightweight — these are less common)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WDLAnalysis:
     main_wdl: Path | None = None
@@ -246,6 +249,7 @@ def analyse_wdl(repo_root: Path) -> WDLAnalysis:
 # Unified WorkflowPlan
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WorkflowResurrectionPlan:
     """Structured resurrection plan produced by the Workflow Scout.
@@ -254,11 +258,12 @@ class WorkflowResurrectionPlan:
     sandbox strategy (container profile resolution, runner version pinning)
     rather than the default Python import + traceback loop.
     """
+
     language: WorkflowLanguage
-    entry_point: str                        # e.g. "nextflow run main.nf"
-    container_strategy: str                 # e.g. "-profile docker"
-    runner_version_pin: str | None          # e.g. "nextflow 23.10.1"
-    sanity_check: str                       # falsifiable pass criterion
+    entry_point: str  # e.g. "nextflow run main.nf"
+    container_strategy: str  # e.g. "-profile docker"
+    runner_version_pin: str | None  # e.g. "nextflow 23.10.1"
+    sanity_check: str  # falsifiable pass criterion
     known_issues: list[str] = field(default_factory=list)
     # Raw analysis objects for downstream consumption
     nextflow: NextflowAnalysis | None = None
@@ -276,7 +281,7 @@ def build_resurrection_plan(repo_root: Path) -> WorkflowResurrectionPlan:
         if nf.min_nextflow_version:
             pin = f"nextflow {nf.min_nextflow_version}"
         elif nf.dsl_version == 1:
-            pin = "nextflow 22.10.8"   # last version with DSL1 support
+            pin = "nextflow 22.10.8"  # last version with DSL1 support
         entry = f"nextflow run {nf.main_nf or 'main.nf'} -profile docker"
         plan = WorkflowResurrectionPlan(
             language="nextflow",
@@ -308,8 +313,7 @@ def build_resurrection_plan(repo_root: Path) -> WorkflowResurrectionPlan:
                 f"snakemake=={sm.min_snakemake_version}" if sm.min_snakemake_version else None
             ),
             sanity_check=(
-                "snakemake --dryrun exits 0 on the bundled config; "
-                "all target rules are reachable."
+                "snakemake --dryrun exits 0 on the bundled config; all target rules are reachable."
             ),
             known_issues=sm.issues,
             snakemake=sm,

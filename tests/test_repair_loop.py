@@ -226,8 +226,14 @@ def test_loop_pass_emits_full_contract(tmp_path: Path) -> None:
     assert sandbox.snapshots[-1] == "sanjeevini/foo:resurrected"
 
     d = tmp_path / "foo"
-    for name in ("contract.yaml", "predict.py", "Dockerfile", "smoke_test.sh",
-                 "REPRODUCE.md", "PROVENANCE.json"):
+    for name in (
+        "contract.yaml",
+        "predict.py",
+        "Dockerfile",
+        "smoke_test.sh",
+        "REPRODUCE.md",
+        "PROVENANCE.json",
+    ):
         assert (d / name).is_file(), name
 
     # contract.yaml embeds a valid ContractSchema
@@ -250,8 +256,9 @@ def test_smoke_test_is_self_contained_replay(tmp_path: Path) -> None:
         ),
     ]
     sandbox = FakeSandbox(returncodes=[0, 0, 0])
-    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
-                         contracts_root=tmp_path, today="2026-07-19").run()
+    outcome = RepairLoop(
+        _spec(), sandbox, ScriptedAgent(actions), contracts_root=tmp_path, today="2026-07-19"
+    ).run()
 
     # every successful command is recorded, in order
     assert outcome.reproduction == [a.cmd for a in actions]
@@ -268,12 +275,11 @@ def test_smoke_test_is_self_contained_replay(tmp_path: Path) -> None:
 
 def test_reproduction_excludes_failed_turns(tmp_path: Path) -> None:
     actions = [
-        RepairAction(kind="exec", cmd=["bad", "cmd"]),                     # fails
-        RepairAction(kind="exec", cmd=["good"], is_sanity_check=True),     # passes
+        RepairAction(kind="exec", cmd=["bad", "cmd"]),  # fails
+        RepairAction(kind="exec", cmd=["good"], is_sanity_check=True),  # passes
     ]
     sandbox = FakeSandbox(returncodes=[1, 0])
-    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
-                         contracts_root=tmp_path).run()
+    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions), contracts_root=tmp_path).run()
     assert outcome.reproduction == [["good"]]  # the failed attempt is not in the recipe
 
 
@@ -310,9 +316,7 @@ def test_loop_give_up_is_failed_and_writes_provenance_only(tmp_path: Path) -> No
 
 def test_loop_enforces_turn_limit(tmp_path: Path) -> None:
     sandbox = FakeSandbox()
-    loop = RepairLoop(
-        _spec(), sandbox, InfiniteAgent(), max_turns=3, contracts_root=tmp_path
-    )
+    loop = RepairLoop(_spec(), sandbox, InfiniteAgent(), max_turns=3, contracts_root=tmp_path)
     outcome = loop.run()
     assert outcome.verdict == "TIMEOUT"
     assert outcome.turns == 3
@@ -327,8 +331,7 @@ def test_loop_recovers_from_command_timeout(tmp_path: Path) -> None:
         RepairAction(kind="exec", cmd=["make"]),
         RepairAction(kind="exec", cmd=["pytest"], is_sanity_check=True),
     ]
-    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions),
-                         contracts_root=tmp_path).run()
+    outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions), contracts_root=tmp_path).run()
     assert outcome.verdict == "PASS"
     assert outcome.turns == 2
     assert sandbox.execs == [["make"], ["pytest"]]
@@ -338,8 +341,9 @@ def test_loop_aborts_after_repeated_container_errors(tmp_path: Path) -> None:
     from sanjeevini.sandbox.docker_sandbox import DockerError
 
     sandbox = FakeSandbox(raises=[DockerError("dead"), DockerError("dead"), DockerError("dead")])
-    outcome = RepairLoop(_spec(), sandbox, InfiniteAgent(), max_turns=20,
-                         contracts_root=tmp_path).run()
+    outcome = RepairLoop(
+        _spec(), sandbox, InfiniteAgent(), max_turns=20, contracts_root=tmp_path
+    ).run()
     assert outcome.verdict == "FAILED"
     assert "unrecoverable" in outcome.reason
     assert outcome.turns == 3
@@ -350,8 +354,7 @@ def test_loop_survives_agent_exception(tmp_path: Path) -> None:
         def next_action(self, state: LoopState) -> RepairAction:
             raise RuntimeError("boom")
 
-    outcome = RepairLoop(_spec(), FakeSandbox(), ExplodingAgent(),
-                         contracts_root=tmp_path).run()
+    outcome = RepairLoop(_spec(), FakeSandbox(), ExplodingAgent(), contracts_root=tmp_path).run()
     assert outcome.verdict == "FAILED"
     assert "agent call failed" in outcome.reason and "boom" in outcome.reason
     # a contract (provenance) is still emitted rather than crashing
@@ -382,9 +385,7 @@ def test_loop_turn_limit_already_reached_on_resume(tmp_path: Path) -> None:
         TurnRecord(turn=2, cmd=["b"], returncode=0, stdout="", stderr="", duration_s=0.0),
     ]
     sandbox = FakeSandbox(prior=prior)
-    loop = RepairLoop(
-        _spec(), sandbox, InfiniteAgent(), max_turns=2, contracts_root=tmp_path
-    )
+    loop = RepairLoop(_spec(), sandbox, InfiniteAgent(), max_turns=2, contracts_root=tmp_path)
     outcome = loop.run()
     assert outcome.verdict == "TIMEOUT"
     assert outcome.turns == 2
@@ -482,7 +483,10 @@ def test_resurrect_build_agent_returns_llm_agent_or_needs_anthropic() -> None:
 def test_report_prints_contract(capsys: pytest.CaptureFixture[str]) -> None:
     args = argparse.Namespace(url="https://github.com/acme/foo")
     outcome = RepairOutcome(
-        verdict="PASS", turns=3, cost_usd=0.1, contract_dir=Path("/tmp/c/foo"),
+        verdict="PASS",
+        turns=3,
+        cost_usd=0.1,
+        contract_dir=Path("/tmp/c/foo"),
         sanity_cmd=["t"],
     )
     ResurrectCommand(args)._report(outcome)

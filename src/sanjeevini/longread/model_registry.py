@@ -211,6 +211,7 @@ _DEEPVARIANT_MODELS: list[dict[str, Any]] = [
 # Index and lookup
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ModelIndex:
     _records: list[dict[str, Any]] = field(default_factory=list)
@@ -237,15 +238,17 @@ class ModelIndex:
                 continue
             if platform and r.get("platform", "").lower() != platform.lower():
                 continue
-            results.append(ModelBundleRef(
-                tool=r["tool"],
-                version=r["version"],
-                model_name=r["model_name"],
-                source_url=r["source_url"],
-                size_gb=r.get("size_gb"),
-                gpu_required=r.get("gpu_required", False),
-                chemistry=r.get("chemistry"),
-            ))
+            results.append(
+                ModelBundleRef(
+                    tool=r["tool"],
+                    version=r["version"],
+                    model_name=r["model_name"],
+                    source_url=r["source_url"],
+                    size_gb=r.get("size_gb"),
+                    gpu_required=r.get("gpu_required", False),
+                    chemistry=r.get("chemistry"),
+                )
+            )
         return results
 
     def recommend(
@@ -272,9 +275,9 @@ class ModelIndex:
 
 # Singleton model index — populated at module import time
 MODEL_INDEX = ModelIndex()
-MODEL_INDEX.add(_DORADO_MODELS,     "dorado")
-MODEL_INDEX.add(_MEDAKA_MODELS,     "medaka")
-MODEL_INDEX.add(_CLAIR3_MODELS,     "clair3")
+MODEL_INDEX.add(_DORADO_MODELS, "dorado")
+MODEL_INDEX.add(_MEDAKA_MODELS, "medaka")
+MODEL_INDEX.add(_CLAIR3_MODELS, "clair3")
 MODEL_INDEX.add(_DEEPVARIANT_MODELS, "deepvariant")
 
 
@@ -285,9 +288,9 @@ MODEL_INDEX.add(_DEEPVARIANT_MODELS, "deepvariant")
 # Patterns that signal a specific ONT chemistry in READMEs / config files
 _CHEMISTRY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"r10\.4\.1|r10_4_1|R10\.4\.1|r1041", re.I), "r10.4.1_e8.2"),
-    (re.compile(r"r9\.4\.1|r9_4_1|R9\.4\.1|r941",   re.I), "r9.4.1_e8.1"),
+    (re.compile(r"r9\.4\.1|r9_4_1|R9\.4\.1|r941", re.I), "r9.4.1_e8.1"),
     (re.compile(r"hifi|ccs|pacbio_hifi|revio|sequel.?ii?e", re.I), "pacbio-hifi"),
-    (re.compile(r"clr|subread|rs.ii",                re.I), "pacbio-clr"),
+    (re.compile(r"clr|subread|rs.ii", re.I), "pacbio-clr"),
 ]
 
 

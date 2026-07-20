@@ -11,9 +11,7 @@ from sanjeevini.mcp import server
 
 
 def test_initialize_returns_server_info() -> None:
-    resp = server.dispatch(
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-    )
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
     assert resp is not None
     assert resp["result"]["serverInfo"] == server.SERVER_INFO
     assert resp["result"]["protocolVersion"] == server.PROTOCOL_VERSION
@@ -65,14 +63,20 @@ def test_tools_call_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> No
         ("resurrect", {"url": "https://github.com/x/y", "turns": 10}, ["resurrect"]),
         (
             "pin",
-            {"packages": ["pysam"], "date": "2021-01-01", "ecosystem": "conda",
-             "channels": ["bioconda"]},
+            {
+                "packages": ["pysam"],
+                "date": "2021-01-01",
+                "ecosystem": "conda",
+                "channels": ["bioconda"],
+            },
             ["pin", "--date", "2021-01-01", "pysam", "--conda"],
         ),
-        ("registry_search", {"query": "SV caller", "domain": "longread-ont"},
-         ["registry", "search", "SV caller"]),
-        ("run_pipeline", {"pipeline_yaml": "p.yaml", "dry_run": True},
-         ["run", "p.yaml"]),
+        (
+            "registry_search",
+            {"query": "SV caller", "domain": "longread-ont"},
+            ["registry", "search", "SV caller"],
+        ),
+        ("run_pipeline", {"pipeline_yaml": "p.yaml", "dry_run": True}, ["run", "p.yaml"]),
     ],
 )
 def test_tool_argv_builders(
@@ -86,8 +90,12 @@ def test_tool_argv_builders(
 
     monkeypatch.setattr(server, "_run_jeeva", fake_run_jeeva)
     server.dispatch(
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-         "params": {"name": name, "arguments": arguments}}
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
     )
     argv = list(seen["argv"])
     assert argv[: len(expected_head)] == expected_head
@@ -95,8 +103,12 @@ def test_tool_argv_builders(
 
 def test_unknown_tool_returns_error() -> None:
     resp = server.dispatch(
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-         "params": {"name": "nope", "arguments": {}}}
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "nope", "arguments": {}},
+        }
     )
     assert resp is not None
     payload = json.loads(resp["result"]["content"][0]["text"])

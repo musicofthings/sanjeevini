@@ -32,6 +32,7 @@ dispatch, the contract emitter, and the decay check are all dependency-free.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shlex
@@ -48,6 +49,12 @@ import yaml
 
 from sanjeevini import __version__ as JEEVA_VERSION
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
+from sanjeevini.repair.knowledge import (
+    KnowledgeStore,
+    default_store,
+    error_signature,
+    lessons_from_bugs,
+)
 from sanjeevini.sandbox.checkpoint import CheckpointStore, TurnRecord
 from sanjeevini.sandbox.docker_sandbox import DockerError, DockerSandbox, ExecResult
 from sanjeevini.scouts.python_scout import PythonResurrectionPlan, PythonScout
@@ -181,6 +188,8 @@ class ResurrectionSpec:
         gpu_required: Whether the tool needs a GPU.
         entry_command: The tool's run command (workflow entry point; empty for
             Python/R, where the passing sanity command is used instead).
+        framework: Canonical framework label (e.g. ``tensorflow-1.x``), used to
+            score which prior lessons are relevant to this resurrection.
     """
 
     tool_slug: str
@@ -192,6 +201,7 @@ class ResurrectionSpec:
     workflow_type: str = "python"
     gpu_required: bool = False
     entry_command: str = ""
+    framework: str = ""
 
 
 def _gpu_from_image(base_image: str) -> bool:
@@ -223,6 +233,7 @@ def spec_from_plan(plan: ResurrectionPlan, *, url: str, repo_commit: str = "") -
             workflow_type=plan.language,
             gpu_required=False,
             entry_command=plan.entry_point,
+            framework=plan.language,
         )
     if isinstance(plan, RResurrectionPlan):
         return ResurrectionSpec(
@@ -234,6 +245,7 @@ def spec_from_plan(plan: ResurrectionPlan, *, url: str, repo_commit: str = "") -
             repo_commit=repo_commit,
             workflow_type="r",
             gpu_required=False,
+            framework="r",
         )
     return ResurrectionSpec(
         tool_slug=slug,
@@ -244,6 +256,7 @@ def spec_from_plan(plan: ResurrectionPlan, *, url: str, repo_commit: str = "") -
         repo_commit=repo_commit,
         workflow_type="python",
         gpu_required=_gpu_from_image(plan.base_image),
+        framework=plan.framework,
     )
 
 
@@ -421,6 +434,7 @@ class RepairLoop:
         max_turns: int = 60,
         contracts_root: Path | str = "contracts",
         today: str | None = None,
+        knowledge: KnowledgeStore | None = None,
     ) -> None:
         """Configure a repair loop.
 
@@ -431,6 +445,8 @@ class RepairLoop:
             max_turns: Hard ceiling on total turns (including resumed turns).
             contracts_root: Directory contracts are emitted under.
             today: Override for the resurrection date (defaults to today, UTC).
+            knowledge: Cross-run lesson store to record this run's fixes into;
+                ``None`` disables learning (the default for tests).
         """
         self.spec = spec
         self.sandbox = sandbox
@@ -438,6 +454,7 @@ class RepairLoop:
         self.max_turns = max_turns
         self.contracts_root = Path(contracts_root)
         self.today = today or _utc_today()
+        self.knowledge = knowledge
 
     def run(self) -> RepairOutcome:
         """Run the loop to a terminal verdict and emit the contract.
@@ -525,6 +542,9 @@ class RepairLoop:
                         "class": action.bug_class or "unknown",
                         "description": action.bug_description,
                         "patch": action.patch,
+                        # The traceback this patch was a response to — the
+                        # "symptom" half of the lesson learned from this fix.
+                        "symptom": error_signature(state.last_stderr),
                     }
                 )
 
@@ -556,7 +576,26 @@ class RepairLoop:
             final_image=final_image,
         )
         outcome.contract_dir = self._emit(outcome)
+        self._learn(outcome)
         return outcome
+
+    def _learn(self, outcome: RepairOutcome) -> None:
+        """Record this run's fixes as lessons for future resurrections.
+
+        Learning is best-effort: an unwritable store must never turn a successful
+        resurrection into a crash.
+        """
+        if self.knowledge is None:
+            return
+        lessons = lessons_from_bugs(
+            outcome.bugs_fixed,
+            framework=self.spec.framework,
+            tool=self.spec.tool_slug,
+        )
+        if not lessons:
+            return
+        with contextlib.suppress(OSError):
+            self.knowledge.extend(lessons)
 
     def _exec(self, action: RepairAction) -> tuple[ExecResult, bool]:
         """Run one action, turning sandbox failures into a failed result.
@@ -607,22 +646,14 @@ class RepairLoop:
         (slug_dir / "contract.yaml").write_text(self._contract_yaml(), encoding="utf-8")
         (slug_dir / "Dockerfile").write_text(self._dockerfile(entry), encoding="utf-8")
         (slug_dir / "predict.py").write_text(self._predict_py(entry), encoding="utf-8")
-        (slug_dir / "smoke_test.sh").write_text(
-            self._smoke_test(outcome), encoding="utf-8"
-        )
-        (slug_dir / "REPRODUCE.md").write_text(
-            self._reproduce_md(outcome), encoding="utf-8"
-        )
+        (slug_dir / "smoke_test.sh").write_text(self._smoke_test(outcome), encoding="utf-8")
+        (slug_dir / "REPRODUCE.md").write_text(self._reproduce_md(outcome), encoding="utf-8")
         return slug_dir
 
     def _schema(self) -> ContractSchema:
         return ContractSchema(
-            inputs=[
-                IOPort(name="input", type=GenomicFileType.ANY, description="primary input")
-            ],
-            outputs=[
-                IOPort(name="output", type=GenomicFileType.ANY, description="primary output")
-            ],
+            inputs=[IOPort(name="input", type=GenomicFileType.ANY, description="primary input")],
+            outputs=[IOPort(name="output", type=GenomicFileType.ANY, description="primary output")],
             gpu_required=self.spec.gpu_required,
             workflow_type=self.spec.workflow_type,  # type: ignore[arg-type]
         )
@@ -645,7 +676,7 @@ class RepairLoop:
             f"FROM {self.spec.base_image}\n"
             f"WORKDIR /work\n"
             f"COPY predict.py smoke_test.sh ./\n"
-            f'CMD {cmd_json}\n'
+            f"CMD {cmd_json}\n"
         )
 
     def _predict_py(self, entry: list[str]) -> str:
@@ -998,22 +1029,21 @@ class ResurrectCommand:
         with tempfile.TemporaryDirectory(prefix="jeeva-resurrect-") as tmp:
             repo_dir = Path(tmp) / "repo"
             commit = self._clone(url, repo_dir)
-            plan = asyncio.run(
-                select_plan(repo_dir, url, confirm=not self.args.no_scout)
-            )
+            plan = asyncio.run(select_plan(repo_dir, url, confirm=not self.args.no_scout))
             spec = spec_from_plan(plan, url=url, repo_commit=commit)
             if self.args.image:
                 spec.base_image = self.args.image
 
-            checkpoint_dir = (
-                Path(self.args.checkpoint_dir) if self.args.checkpoint_dir else None
-            )
+            checkpoint_dir = Path(self.args.checkpoint_dir) if self.args.checkpoint_dir else None
             # Resume from the last good snapshot when this checkpoint has prior turns.
             resume_image: str | None = None
             if checkpoint_dir is not None:
                 resume_image = CheckpointStore(checkpoint_dir).last_successful_snapshot()
 
-            agent = self._build_agent(spec)  # fail fast before starting a container
+            # One store, both directions: the agent reads prior lessons from it,
+            # the loop writes this run's fixes back into it.
+            knowledge = default_store()
+            agent = self._build_agent(spec, knowledge)  # fail fast, before any container
             sandbox = DockerSandbox(
                 resume_image or spec.base_image,
                 workdir=self.args.workdir,
@@ -1027,7 +1057,9 @@ class ResurrectCommand:
                     # Fresh run: seed the container with the checkout. On resume the
                     # snapshot already carries the repo and any in-container edits.
                     sandbox.copy_in(repo_dir, self.args.workdir)
-                loop = RepairLoop(spec, sandbox, agent, max_turns=self.args.turns)
+                loop = RepairLoop(
+                    spec, sandbox, agent, max_turns=self.args.turns, knowledge=knowledge
+                )
                 outcome = loop.run()
             finally:
                 if not self.args.keep:
@@ -1060,11 +1092,14 @@ class ResurrectCommand:
         )
         return head.stdout.strip()
 
-    def _build_agent(self, spec: ResurrectionSpec) -> RepairAgent:
+    def _build_agent(
+        self, spec: ResurrectionSpec, knowledge: KnowledgeStore | None = None
+    ) -> RepairAgent:
         """Build the autonomous LLM agent that plays :class:`RepairAgent`.
 
         Args:
             spec: The resurrection spec to plan against.
+            knowledge: Lesson store the agent retrieves prior fixes from.
 
         Returns:
             An :class:`~sanjeevini.repair.agent.LLMRepairAgent`.
@@ -1075,7 +1110,7 @@ class ResurrectCommand:
         """
         from sanjeevini.repair.agent import LLMRepairAgent
 
-        return LLMRepairAgent(spec)
+        return LLMRepairAgent(spec, knowledge=knowledge)
 
     def _report(self, outcome: RepairOutcome) -> None:
         """Print the verdict, contract directory, and smoke-test command."""
