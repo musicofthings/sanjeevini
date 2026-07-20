@@ -48,6 +48,7 @@ from typing import Literal, Protocol
 import yaml
 
 from sanjeevini import __version__ as JEEVA_VERSION
+from sanjeevini.contracts.output_type import extensions_for_check
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
 from sanjeevini.repair.knowledge import (
     KnowledgeStore,
@@ -387,6 +388,36 @@ class ScriptedAgent:
 
 
 @dataclass
+class SanityEvidence:
+    """Whether the sanity check's structural claim is backed by real artefacts.
+
+    Attributes:
+        status: ``supported`` (matching files found), ``unsupported`` (the check
+            names a type but no such file exists), ``untyped`` (the check makes
+            no structural claim to verify), or ``unknown`` (the probe failed).
+        claimed_extensions: Extensions implied by the check's claimed type.
+        found: Paths of matching non-empty files (capped).
+    """
+
+    status: Literal["supported", "unsupported", "untyped", "unknown"] = "untyped"
+    claimed_extensions: list[str] = field(default_factory=list)
+    found: list[str] = field(default_factory=list)
+
+    @property
+    def contradicts_claim(self) -> bool:
+        """Whether the check named an output type that never materialised."""
+        return self.status == "unsupported"
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serialisable dict for the provenance record."""
+        return {
+            "status": self.status,
+            "claimed_extensions": self.claimed_extensions,
+            "found": self.found,
+        }
+
+
+@dataclass
 class RepairOutcome:
     """The terminal result of a repair run.
 
@@ -399,6 +430,8 @@ class RepairOutcome:
         sanity_cmd: The command that proved the sanity check, on ``PASS``.
         final_image: The committed image tag banking the passing state.
         contract_dir: Directory the contract/provenance was written to.
+        evidence: Whether the sanity check's structural claim is backed by files
+            the run actually produced (a qualifier on PASS, never a verdict).
     """
 
     verdict: Verdict
@@ -410,6 +443,7 @@ class RepairOutcome:
     reproduction: list[list[str]] = field(default_factory=list)
     final_image: str = ""
     contract_dir: Path | None = None
+    evidence: SanityEvidence = field(default_factory=SanityEvidence)
 
 
 # ---------------------------------------------------------------------------
@@ -575,9 +609,51 @@ class RepairLoop:
             reproduction=reproduction,
             final_image=final_image,
         )
+        if verdict == "PASS":
+            outcome.evidence = self._verify_sanity_claim()
         outcome.contract_dir = self._emit(outcome)
         self._learn(outcome)
         return outcome
+
+    def _verify_sanity_claim(self) -> SanityEvidence:
+        """Check the sanity check's structural claim against real produced files.
+
+        The exit code proves a command succeeded; it does not prove the command
+        proved what the plan *said* it would. A check reading "the BAM output
+        passes samtools quickcheck" is only meaningful if a BAM was actually
+        written. This probes the sandbox for files matching the claimed type's
+        extensions and reports what it found.
+
+        This never overturns the verdict. A real exit code outranks a filesystem
+        heuristic — a tool may stream to stdout, write outside the working
+        directory, or emit a type this module does not track — so an unsupported
+        claim is recorded as a qualifier on the PASS, not a failure.
+
+        Returns:
+            The :class:`SanityEvidence` for this run.
+        """
+        extensions = extensions_for_check(self.spec.sanity_check)
+        if not extensions:
+            return SanityEvidence(status="untyped", claimed_extensions=[], found=[])
+
+        # -newer is unavailable portably; list candidates by extension instead.
+        patterns: list[str] = []
+        for ext in extensions:
+            patterns += ["-o", "-iname", f"*{ext}"]
+        cmd = ["find", ".", "-type", "f", "(", *patterns[1:], ")", "-size", "+0c"]
+        try:
+            result = self.sandbox.exec(cmd, timeout=60)
+        except (DockerError, TimeoutError):
+            return SanityEvidence(status="unknown", claimed_extensions=list(extensions), found=[])
+        if result.returncode != 0:
+            return SanityEvidence(status="unknown", claimed_extensions=list(extensions), found=[])
+
+        found = [line.strip() for line in result.stdout.splitlines() if line.strip()][:20]
+        return SanityEvidence(
+            status="supported" if found else "unsupported",
+            claimed_extensions=list(extensions),
+            found=found,
+        )
 
     def _learn(self, outcome: RepairOutcome) -> None:
         """Record this run's fixes as lessons for future resurrections.
@@ -732,7 +808,32 @@ class RepairLoop:
             f"- **Cost (USD):** {outcome.cost_usd}\n\n"
             f"## Sanity check\n\n{self.spec.sanity_check}\n\n"
             f"## Result\n\n{verdict_line}\n"
+            f"{self._evidence_section(outcome)}"
             f"{self._reproduction_section(outcome)}"
+        )
+
+    def _evidence_section(self, outcome: RepairOutcome) -> str:
+        """Return the Markdown block reporting how well the check's claim held up."""
+        evidence = outcome.evidence
+        if evidence.status == "untyped":
+            return ""
+        if evidence.status == "unknown":
+            return (
+                "\n## Evidence\n\nThe output-type probe could not run, so the sanity "
+                "check's structural claim was not independently verified.\n"
+            )
+        claimed = ", ".join(evidence.claimed_extensions)
+        if evidence.status == "supported":
+            files = "\n".join(f"- `{path}`" for path in evidence.found)
+            return (
+                f"\n## Evidence\n\nThe check claims a `{claimed}` output, and matching "
+                f"non-empty files were produced:\n\n{files}\n"
+            )
+        return (
+            f"\n## Evidence\n\n**The check claims a `{claimed}` output, but no such file "
+            "was found.** The sanity command exited 0, so the verdict stands — but the "
+            "check may be proving less than its wording asserts. Treat this contract "
+            "with more scepticism than one whose claim is backed by artefacts.\n"
         )
 
     def _reproduction_section(self, outcome: RepairOutcome) -> str:
@@ -762,6 +863,7 @@ class RepairLoop:
             "bugs_fixed": outcome.bugs_fixed,
             "sanity_check_verdict": outcome.verdict,
             "sanity_check_metric": self.spec.sanity_check,
+            "sanity_check_evidence": outcome.evidence.to_dict(),
         }
 
 
@@ -1119,6 +1221,14 @@ class ResurrectCommand:
         print(f"cost (usd)   : {outcome.cost_usd}")
         if outcome.reason:
             print(f"reason       : {outcome.reason}")
+        if outcome.evidence.contradicts_claim:
+            exts = ", ".join(outcome.evidence.claimed_extensions)
+            print(
+                f"WARNING      : the sanity check claims a {exts} output, but no such "
+                "file was found. The command exited 0, so this is still a PASS — but "
+                "the check may be proving less than it says.",
+                file=sys.stderr,
+            )
         if outcome.contract_dir is not None:
             print(f"contract     : {outcome.contract_dir}")
             if outcome.verdict == "PASS":

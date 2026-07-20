@@ -334,7 +334,8 @@ def test_loop_recovers_from_command_timeout(tmp_path: Path) -> None:
     outcome = RepairLoop(_spec(), sandbox, ScriptedAgent(actions), contracts_root=tmp_path).run()
     assert outcome.verdict == "PASS"
     assert outcome.turns == 2
-    assert sandbox.execs == [["make"], ["pytest"]]
+    # The trailing exec is the post-PASS output-type evidence probe.
+    assert sandbox.execs[:2] == [["make"], ["pytest"]]
 
 
 def test_loop_aborts_after_repeated_container_errors(tmp_path: Path) -> None:

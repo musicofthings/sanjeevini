@@ -18,7 +18,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from sanjeevini.contracts.schema import GenomicFileType
+from sanjeevini.contracts.output_type import GENERIC_CHECK, infer_output_type
 from sanjeevini.scouts.repo import RepoSnapshot, fetch_snapshot
 
 Fetcher = Callable[[str], Awaitable[RepoSnapshot]]
@@ -139,20 +139,11 @@ _DEFAULT_TURNS = {
     "plain-python": 10,
 }
 
-# Output-type keyword -> falsifiable structural sanity check.
-_OUTPUT_CHECKS: list[tuple[str, str]] = [
-    (
-        GenomicFileType.VCF.value,
-        "the VCF output parses with `bcftools stats` and contains ≥ 1 variant record",
-    ),
-    (
-        GenomicFileType.BAM.value,
-        "the BAM output passes `samtools quickcheck` and contains ≥ 1 alignment",
-    ),
-    (GenomicFileType.FASTA.value, "the FASTA output is valid and contains ≥ 1 sequence"),
-    ("sequence", "the tool emits ≥ 100 output sequences and each is non-empty"),
-    ("structure", "the output structure file is valid and contains ≥ 1 model with coordinates"),
+# Non-genomic output types, still keyword-matched: these are structural claims
+# about scientific artefacts that GenomicFileType does not model.
+_STRUCTURE_CHECKS: list[tuple[str, str]] = [
     ("pdb", "the output PDB file is valid and contains ≥ 1 model with atomic coordinates"),
+    ("structure", "the output structure file is valid and contains ≥ 1 model with coordinates"),
 ]
 
 
@@ -275,8 +266,13 @@ def generate_sanity_check(snapshot: RepoSnapshot) -> str:
     """Generate a falsifiable sanity check for a repo.
 
     Prefers a benchmark threshold quoted in the README or paper abstract; falls
-    back to a structural check on the detected output type; finally to a generic
-    non-empty/size check. The result is always measurable.
+    back to a structural check on the *inferred output type*; finally to a
+    type-agnostic non-empty/size check. The result is always measurable.
+
+    Output-type inference is evidence-weighted (see
+    :mod:`sanjeevini.contracts.output_type`) rather than first-mention-wins. When
+    the evidence is ambiguous it deliberately declines to name a type and returns
+    the generic check — asserting the wrong format is worse than asserting less.
 
     Args:
         snapshot: The repository snapshot.
@@ -294,15 +290,16 @@ def generate_sanity_check(snapshot: RepoSnapshot) -> str:
             f"{floor:.2f} on the benchmark test input."
         )
 
+    profile = infer_output_type(corpus)
+    if profile is not None:
+        return f"On the test input, {profile.check}."
+
     low = corpus.lower()
-    for keyword, check in _OUTPUT_CHECKS:
+    for keyword, check in _STRUCTURE_CHECKS:
         if keyword in low:
             return f"On the test input, {check}."
 
-    return (
-        "The primary output file is produced, is non-empty and at least 10 KB, "
-        "and parses without error."
-    )
+    return GENERIC_CHECK
 
 
 # ---------------------------------------------------------------------------
