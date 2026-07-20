@@ -28,7 +28,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from sanjeevini.repair.knowledge import KnowledgeStore, Lesson
-from sanjeevini.repair.loop import RepairAction
+from sanjeevini.repair.loop import RepairAction, is_read_only
 
 if TYPE_CHECKING:
     from sanjeevini.repair.loop import LoopState, ResurrectionSpec, TurnOutcome
@@ -221,12 +221,8 @@ def render_state(
     return "\n".join(lines)
 
 
-# Commands that only look at things; a run of these means no progress is happening.
-_READ_ONLY_RE = re.compile(
-    r"^\s*(ls|cat|sed|grep|head|tail|find|wc|file|stat|awk|less|more|nl|pwd|tree)\b"
-)
 # Consecutive read-only turns tolerated before the prompt calls it out.
-_STALL_LIMIT = 6
+_STALL_LIMIT = 4
 
 
 def _reading_without_progress(history: list[TurnOutcome]) -> int:
@@ -244,8 +240,7 @@ def _reading_without_progress(history: list[TurnOutcome]) -> int:
     """
     streak = 0
     for turn in reversed(history):
-        payload = turn.action.cmd[-1] if turn.action.cmd else ""
-        if turn.action.patch or not _READ_ONLY_RE.match(payload):
+        if turn.action.patch or not is_read_only(turn.action.cmd):
             break
         streak += 1
     return streak if streak >= _STALL_LIMIT else 0

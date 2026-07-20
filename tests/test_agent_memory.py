@@ -25,8 +25,10 @@ from sanjeevini.repair.loop import (
     RepairAction,
     RepairLoop,
     ResurrectionSpec,
+    ScriptedAgent,
     TurnOutcome,
     _record_note,
+    is_read_only,
 )
 from sanjeevini.sandbox.docker_sandbox import ExecResult
 
@@ -243,3 +245,99 @@ def test_the_system_prompt_warns_about_amnesia() -> None:
 
     assert "NO MEMORY BETWEEN TURNS" in RESURRECTION_SYSTEM_PROMPT
     assert "Never re-read a file you have already read" in RESURRECTION_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# No-op repeat suppression
+# ---------------------------------------------------------------------------
+
+
+def test_a_repeated_inspection_is_not_re_executed(tmp_path: Path) -> None:
+    # The second PyPore failure: the agent emitted the identical sed command
+    # five times. Re-running an inspection cannot reveal anything new.
+    class Counter:
+        def __init__(self) -> None:
+            self.execs: list[list[str]] = []
+            self.previous_turns: list[object] = []
+
+        def exec(self, cmd: list[str], timeout: int = 300) -> ExecResult:
+            self.execs.append(list(cmd))
+            return ExecResult(0, "file body", "", 0.1)
+
+        def snapshot(self, tag: str) -> str:
+            return tag
+
+        def last_successful_snapshot(self) -> str | None:
+            return None
+
+    sandbox = Counter()
+    repeat = ["bash", "-lc", "sed -n '150,320p' parsers.py"]
+    agent = ScriptedAgent(
+        [
+            RepairAction(kind="exec", cmd=repeat),
+            RepairAction(kind="exec", cmd=repeat),
+            RepairAction(kind="exec", cmd=repeat),
+            RepairAction(kind="exec", cmd=["bash", "-lc", "run"], is_sanity_check=True),
+        ]
+    )
+    outcome = RepairLoop(_spec(), sandbox, agent, contracts_root=tmp_path).run()
+
+    assert outcome.verdict == "PASS"
+    # Executed once, not three times; the sanity command still ran.
+    assert sandbox.execs.count(repeat) == 1
+
+
+def test_a_suppressed_repeat_tells_the_agent_why() -> None:
+    result = RepairLoop._noop_repeat(7)
+    assert result.returncode != 0
+    assert "turn 7" in result.stderr
+    assert "something DIFFERENT" in result.stderr
+
+
+def test_a_repeated_build_command_is_still_re_executed(tmp_path: Path) -> None:
+    # Re-running a build or test after a fix is the whole point — only pure
+    # inspection is safe to suppress.
+    class Counter:
+        def __init__(self) -> None:
+            self.execs: list[list[str]] = []
+            self.previous_turns: list[object] = []
+
+        def exec(self, cmd: list[str], timeout: int = 300) -> ExecResult:
+            self.execs.append(list(cmd))
+            return ExecResult(0, "", "", 0.1)
+
+        def snapshot(self, tag: str) -> str:
+            return tag
+
+        def last_successful_snapshot(self) -> str | None:
+            return None
+
+    sandbox = Counter()
+    build = ["bash", "-lc", "python setup.py build_ext --inplace"]
+    agent = ScriptedAgent(
+        [
+            RepairAction(kind="exec", cmd=build),
+            RepairAction(kind="exec", cmd=build, is_sanity_check=True),
+        ]
+    )
+    RepairLoop(_spec(), sandbox, agent, contracts_root=tmp_path).run()
+    assert sandbox.execs.count(build) == 2
+
+
+def test_is_read_only_classifies_commands() -> None:
+    assert is_read_only(["bash", "-lc", "sed -n '1,10p' f.py"])
+    assert is_read_only(["bash", "-lc", "grep -n foo f.py"])
+    assert not is_read_only(["bash", "-lc", "pip install numpy"])
+    assert not is_read_only(["bash", "-lc", "python setup.py build"])
+    assert not is_read_only([])
+
+
+def test_notes_are_recorded_in_provenance(tmp_path: Path) -> None:
+    import json
+
+    agent = ScriptedAgent(
+        [RepairAction(kind="exec", cmd=["run"], is_sanity_check=True, notes="core.py is 261 lines")]
+    )
+    RepairLoop(_spec(), _Sandbox(), agent, contracts_root=tmp_path).run()
+    record = json.loads((tmp_path / "pypore" / "PROVENANCE.json").read_text())
+    assert record["agent_notes"] == ["core.py is 261 lines"]

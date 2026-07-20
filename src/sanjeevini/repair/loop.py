@@ -514,11 +514,36 @@ class RepairOutcome:
     final_image: str = ""
     contract_dir: Path | None = None
     evidence: SanityEvidence = field(default_factory=SanityEvidence)
+    notes: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # The repair loop
 # ---------------------------------------------------------------------------
+
+
+# Commands that only inspect state. Re-running one with no intervening change is
+# always a no-op, which makes it safe to suppress — unlike a build or a test,
+# where re-running after a fix is the whole point.
+_READ_ONLY_RE = re.compile(
+    r"^\s*(ls|cat|sed|grep|head|tail|find|wc|file|stat|awk|less|more|nl|pwd|tree)\b"
+)
+# Exit code synthesised for a suppressed repeat.
+_RC_NOOP_REPEAT = 126
+
+
+def is_read_only(cmd: list[str]) -> bool:
+    """Return whether ``cmd`` only inspects state and cannot change anything.
+
+    Args:
+        cmd: The argv list to classify.
+
+    Returns:
+        ``True`` for pure inspection commands (``cat``, ``sed``, ``grep``, …).
+    """
+    if not cmd:
+        return False
+    return bool(_READ_ONLY_RE.match(cmd[-1]))
 
 
 # Working-memory bounds: enough to remember a repo's shape, small enough that the
@@ -607,6 +632,7 @@ class RepairLoop:
         history: list[TurnOutcome] = []
         patch_history: list[str] = []
         notes: list[str] = []
+        inspected: dict[tuple[str, ...], int] = {}
         bugs_fixed: list[dict[str, str]] = []
         cost = 0.0
         verdict: Verdict | None = None
@@ -646,7 +672,16 @@ class RepairLoop:
                 reason = action.reason or "agent signalled the resurrection is unresolvable"
                 break
 
-            result, container_error = self._exec(action)
+            # An inspection command already run cannot tell us anything new, and
+            # a model that repeats one is stuck. Spend the turn saying so rather
+            # than re-running it.
+            key = tuple(action.cmd)
+            if is_read_only(action.cmd) and key in inspected:
+                result, container_error = self._noop_repeat(inspected[key]), False
+            else:
+                if is_read_only(action.cmd):
+                    inspected[key] = turn + 1
+                result, container_error = self._exec(action)
             turn += 1
             history.append(
                 TurnOutcome(
@@ -713,6 +748,7 @@ class RepairLoop:
             sanity_cmd=sanity_cmd,
             reproduction=reproduction,
             final_image=final_image,
+            notes=notes,
         )
         if verdict == "PASS":
             outcome.evidence = self._verify_sanity_claim()
@@ -777,6 +813,28 @@ class RepairLoop:
             return
         with contextlib.suppress(OSError):
             self.knowledge.extend(lessons)
+
+    @staticmethod
+    def _noop_repeat(first_turn: int) -> ExecResult:
+        """Return the synthetic result fed back for a suppressed repeat.
+
+        Args:
+            first_turn: The turn the identical command was first run on.
+
+        Returns:
+            A failed :class:`ExecResult` explaining the suppression.
+        """
+        return ExecResult(
+            _RC_NOOP_REPEAT,
+            "",
+            f"[not executed] You already ran this exact inspection command on turn "
+            f"{first_turn}. Nothing has changed since, so the output would be "
+            "identical. You are repeating yourself instead of making progress. "
+            "Write what you already know into notes, then do something DIFFERENT: "
+            "install a dependency, build the package, write a script, or run the "
+            "code. Do not inspect this again.",
+            0.0,
+        )
 
     def _exec(self, action: RepairAction) -> tuple[ExecResult, bool]:
         """Run one action, turning sandbox failures into a failed result.
@@ -969,6 +1027,8 @@ class RepairLoop:
             "sanity_check_verdict": outcome.verdict,
             "sanity_check_metric": self.spec.sanity_check,
             "sanity_check_evidence": outcome.evidence.to_dict(),
+            # What the agent worked out about the repo — the run's audit trail.
+            "agent_notes": outcome.notes,
         }
 
 
