@@ -330,3 +330,76 @@ def test_a_source_patch_still_lands_in_patch_history(tmp_path: Path) -> None:
         _spec(), FakeSandbox([0]), agent, contracts_root=tmp_path / "contracts"
     ).run()
     assert outcome.bugs_fixed[0]["patch"] == "--- a\n+++ b\n+x"
+
+
+def test_a_symptom_falls_back_to_stdout_when_stderr_is_empty(tmp_path: Path) -> None:
+    # Agents routinely pipe `2>&1 | tail`, which leaves stderr empty and would
+    # otherwise store a lesson with no symptom to match future errors against.
+    store = KnowledgeStore(tmp_path / "k.json")
+
+    class MergedOutputSandbox:
+        """A sandbox that merges stderr into stdout, as `2>&1` does."""
+
+        def __init__(self) -> None:
+            self._rcs = [1, 0]
+            self.previous_turns: list[object] = []
+
+        def exec(self, cmd: list[str], timeout: int = 300) -> ExecResult:
+            rc = self._rcs.pop(0) if self._rcs else 0
+            out = "E: Unable to locate package gcc" if rc else ""
+            return ExecResult(rc, out, "", 0.1)
+
+        def snapshot(self, tag: str) -> str:
+            return tag
+
+        def last_successful_snapshot(self) -> str | None:
+            return None
+
+    agent = ScriptedAgent(
+        [
+            RepairAction(kind="exec", cmd=["apt-get", "install", "gcc"]),
+            RepairAction(
+                kind="exec",
+                cmd=["fix"],
+                bug_class="missing_toolchain",
+                bug_description="repointed apt at archive.debian.org, then installed gcc",
+                is_sanity_check=True,
+            ),
+        ]
+    )
+    outcome = RepairLoop(
+        _spec(),
+        MergedOutputSandbox(),
+        agent,
+        contracts_root=tmp_path / "contracts",
+        knowledge=store,
+    ).run()
+
+    assert outcome.bugs_fixed[0]["symptom"] == "E: Unable to locate package gcc"
+    assert store.all()[0].symptom == "E: Unable to locate package gcc"
+
+
+def test_stderr_still_wins_when_both_are_present(tmp_path: Path) -> None:
+    class BothSandbox:
+        def __init__(self) -> None:
+            self._rcs = [1, 0]
+            self.previous_turns: list[object] = []
+
+        def exec(self, cmd: list[str], timeout: int = 300) -> ExecResult:
+            rc = self._rcs.pop(0) if self._rcs else 0
+            return ExecResult(rc, "noise on stdout", "the real error: not found" if rc else "", 0.1)
+
+        def snapshot(self, tag: str) -> str:
+            return tag
+
+        def last_successful_snapshot(self) -> str | None:
+            return None
+
+    agent = ScriptedAgent(
+        [
+            RepairAction(kind="exec", cmd=["build"]),
+            RepairAction(kind="exec", cmd=["fix"], bug_class="build_failure", is_sanity_check=True),
+        ]
+    )
+    outcome = RepairLoop(_spec(), BothSandbox(), agent, contracts_root=tmp_path / "contracts").run()
+    assert outcome.bugs_fixed[0]["symptom"] == "the real error: not found"

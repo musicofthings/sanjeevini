@@ -525,9 +525,36 @@ class RepairOutcome:
 # Commands that only inspect state. Re-running one with no intervening change is
 # always a no-op, which makes it safe to suppress — unlike a build or a test,
 # where re-running after a fix is the whole point.
-_READ_ONLY_RE = re.compile(
-    r"^\s*(ls|cat|sed|grep|head|tail|find|wc|file|stat|awk|less|more|nl|pwd|tree)\b"
+_INSPECT_VERBS = frozenset(
+    {
+        "ls",
+        "cat",
+        "sed",
+        "grep",
+        "head",
+        "tail",
+        "find",
+        "wc",
+        "file",
+        "stat",
+        "awk",
+        "less",
+        "more",
+        "nl",
+        "tree",
+        "diff",
+        "readlink",
+        "basename",
+        "dirname",
+    }
 )
+# Verbs that neither inspect nor change anything, so they never decide the answer.
+_NEUTRAL_VERBS = frozenset({"cd", "echo", "pwd", "which", "true", "type", "command"})
+# Any redirection makes a command a writer, however innocent its verb looks —
+# `cat > prove.py << EOF` is how the agent writes files.
+_REDIRECT_RE = re.compile(r"(?<![0-9<>])>{1,2}(?!&)")
+_SEGMENT_RE = re.compile(r"&&|\|\||;|\|")
+
 # Exit code synthesised for a suppressed repeat.
 _RC_NOOP_REPEAT = 126
 
@@ -535,15 +562,34 @@ _RC_NOOP_REPEAT = 126
 def is_read_only(cmd: list[str]) -> bool:
     """Return whether ``cmd`` only inspects state and cannot change anything.
 
+    Handles the shapes agents actually emit — ``cd /repo && grep …``, pipelines,
+    and ``&&`` chains — by requiring *every* segment to be inspective or neutral.
+    A single redirection anywhere disqualifies the whole command, so a heredoc
+    like ``cat > prove.py << EOF`` is correctly treated as a write.
+
     Args:
         cmd: The argv list to classify.
 
     Returns:
-        ``True`` for pure inspection commands (``cat``, ``sed``, ``grep``, …).
+        ``True`` only if running the command again could change nothing.
     """
     if not cmd:
         return False
-    return bool(_READ_ONLY_RE.match(cmd[-1]))
+    payload = cmd[-1]
+    if _REDIRECT_RE.search(payload):
+        return False
+
+    saw_inspection = False
+    for segment in _SEGMENT_RE.split(payload):
+        words = segment.strip().split()
+        if not words:
+            continue
+        verb = words[0]
+        if verb in _INSPECT_VERBS:
+            saw_inspection = True
+        elif verb not in _NEUTRAL_VERBS:
+            return False
+    return saw_inspection
 
 
 # Working-memory bounds: enough to remember a repo's shape, small enough that the
@@ -722,9 +768,12 @@ class RepairLoop:
                         "class": action.bug_class or "unknown",
                         "description": action.bug_description,
                         "patch": action.patch or "",
-                        # The traceback this patch was a response to — the
-                        # "symptom" half of the lesson learned from this fix.
-                        "symptom": error_signature(state.last_stderr),
+                        # The failure this fix was a response to — the "symptom"
+                        # half of the lesson. Falls back to stdout because agents
+                        # routinely pipe `2>&1`, which leaves stderr empty and
+                        # would otherwise store a lesson with nothing to match on.
+                        "symptom": error_signature(state.last_stderr)
+                        or error_signature(state.last_stdout),
                     }
                 )
 

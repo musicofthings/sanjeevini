@@ -341,3 +341,44 @@ def test_notes_are_recorded_in_provenance(tmp_path: Path) -> None:
     RepairLoop(_spec(), _Sandbox(), agent, contracts_root=tmp_path).run()
     record = json.loads((tmp_path / "pypore" / "PROVENANCE.json").read_text())
     assert record["agent_notes"] == ["core.py is 261 lines"]
+
+
+# ---------------------------------------------------------------------------
+# Classifying the command shapes agents actually emit
+# ---------------------------------------------------------------------------
+
+
+def test_a_cd_prefixed_inspection_is_read_only() -> None:
+    # The PyPore miss: every command was `cd /workspace/repo && <verb>`, so a
+    # leading-verb match never fired and the filter did nothing.
+    assert is_read_only(["bash", "-lc", "cd /workspace/repo && sed -n '1,80p' PyPore/core.py"])
+    assert is_read_only(["bash", "-lc", "cd /repo && grep -n 'class X' f.py | head -80"])
+
+
+def test_a_write_redirect_is_never_read_only() -> None:
+    # `cat > prove.py << EOF` is how the agent writes files — suppressing or
+    # filtering it would break the run outright.
+    assert not is_read_only(["bash", "-lc", "cd /repo && cat > prove.py << 'EOF'\nx\nEOF"])
+    assert not is_read_only(["bash", "-lc", "echo hi > f.txt"])
+    assert not is_read_only(["bash", "-lc", "cat f.py >> out.txt"])
+
+
+def test_merging_stderr_does_not_count_as_a_redirect() -> None:
+    assert is_read_only(["bash", "-lc", "grep -n foo f.py 2>&1 | head -40"])
+
+
+def test_a_mixed_chain_is_not_read_only() -> None:
+    assert not is_read_only(["bash", "-lc", "cd /repo && grep -n x f.py && pip install numpy"])
+    assert not is_read_only(
+        ["bash", "-lc", "apt-get install -y libc6-dev && find / -name limits.h"]
+    )
+
+
+def test_a_purely_neutral_command_is_not_read_only() -> None:
+    # Nothing was inspected, so there is nothing to suppress.
+    assert not is_read_only(["bash", "-lc", "cd /workspace/repo"])
+    assert not is_read_only(["bash", "-lc", "which gcc"])
+
+
+def test_a_pipeline_of_inspections_is_read_only() -> None:
+    assert is_read_only(["bash", "-lc", "cat f.py | head -100 | wc -l"])
