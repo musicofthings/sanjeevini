@@ -99,7 +99,7 @@
       <span class="badge">Nextflow · Snakemake · WDL</span>
       <span class="badge">Typed genomic I/O</span>
       <span class="badge">MCP server</span>
-      <span class="badge">229 tests · 84% coverage</span>
+      <span class="badge">319 tests · 86% coverage</span>
     </div>
   </div>
 </header>
@@ -192,23 +192,50 @@ export ANTHROPIC_API_KEY=sk-...
   <section>
     <h2>Proof it works</h2>
 
-    <h3>A real resurrection</h3>
-    <p><code>a-slide/pycoQC</code> — an archived Oxford Nanopore read-QC tool:</p>
+    <h3>PyPore — dead since January 2015</h3>
+    <p><a href="https://github.com/jmschrei/PyPore"><code>jmschrei/PyPore</code></a>, a nanopore
+    signal-analysis toolkit, untouched since January 2015. Genuinely decayed: Python 2 only (two
+    modules do not even parse under Python 3), Cython extensions whose pre-generated <code>.c</code>
+    files were never committed, a <code>distutils</code> <code>setup.py</code>, and no test data in
+    the repo at all.</p>
     <div class="stats">
-      <div class="stat"><div class="n">PASS</div><div class="l">verdict, in 9 turns</div></div>
-      <div class="stat"><div class="n">783 MB</div><div class="l"><code>sanjeevini/pycoqc:resurrected</code></div></div>
-      <div class="stat"><div class="n">1.77 MB</div><div class="l">HTML report + valid JSON, exit 0</div></div>
+      <div class="stat"><div class="n">PASS</div><div class="l">verdict, in 22 turns</div></div>
+      <div class="stat"><div class="n">12/12</div><div class="l">blockade events detected &amp; segmented</div></div>
+      <div class="stat"><div class="n">474 MB</div><div class="l"><code>sanjeevini/pypore:resurrected</code></div></div>
     </div>
-    <p class="muted"><code>bash smoke_test.sh</code> replays the verified command chain in a clean container.</p>
+    <p>Jeeva found and fixed four pieces of real rot with no human input:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Bug class</th><th>What it found</th></tr></thead>
+        <tbody>
+          <tr><td><code>missing_toolchain</code></td><td>Debian buster apt mirrors return 404 — repointed <code>sources.list</code> at <code>archive.debian.org</code></td></tr>
+          <tr><td><code>missing_toolchain</code></td><td>no compiler in <code>python:2.7-slim</code> — installed gcc</td></tr>
+          <tr><td><code>build_failure</code></td><td>gcc present but <code>libc6-dev</code> headers (<code>limits.h</code>) missing</td></tr>
+          <tr><td><code>build_failure</code></td><td>pinned <code>cython==0.29.37</code> so the Python 2 <code>.pyx</code> sources compile</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Reproduced independently in a fresh container:
+    <code>docker run --rm sanjeevini/pypore:resurrected bash -lc 'cd /workspace/repo &amp;&amp; python2 prove.py'</code>
+    → 12 events, 22,918-byte JSON, exit 0.</p>
     <div class="note">
-      <b>Two honest caveats on this run.</b> <code>bugs_fixed</code> was empty — pycoQC still installs
-      cleanly, so this is a <em>still-runs</em> case rather than a repair, and the repair heuristics
-      were not exercised. And <code>cost_usd</code> reads <code>0.0</code> because token pricing is not
-      yet wired into the provenance record.
+      Because the repo ships no <code>.abf</code> data, the check proves the scientific core on a
+      <b>synthetic current trace</b>: 12 injected blockade events, requiring ≥10 recovered, ≥1 state
+      per event, and JSON that parses to a non-empty object. The script exits non-zero if any clause
+      fails — Jeeva was explicitly instructed not to fabricate an instrument file.
+    </div>
+
+    <h3>pycoQC — a still-runs case</h3>
+    <p><code>a-slide/pycoQC</code>, an archived ONT read-QC tool: PASS in 9 turns,
+    <code>sanjeevini/pycoqc:resurrected</code> (783 MB), 1.77 MB HTML report + valid JSON.</p>
+    <div class="note">
+      <b>Honest caveats.</b> pycoQC's <code>bugs_fixed</code> was empty — it still installs cleanly,
+      so that run demonstrates verification rather than repair. And <code>cost_usd</code> reads
+      <code>0.0</code> on both runs because token pricing is not yet wired into the provenance record.
     </div>
 
     <h3>Test suite</h3>
-    <pre>229 passed, 6 deselected  <span class="c">·</span>  84% coverage (2424 statements)
+    <pre>319 passed, 6 deselected  <span class="c">·</span>  86% coverage (2678 statements)
 <span class="c">ruff check + ruff format + mypy --strict: clean across src/ and tests/</span></pre>
     <p class="muted">The 6 deselected are <code>-m integration</code> tests needing a live Docker daemon and
     network; <code>pytest -m "not integration"</code> is the CI gate.</p>
@@ -216,16 +243,49 @@ export ANTHROPIC_API_KEY=sk-...
       <table>
         <thead><tr><th>Subsystem</th><th>Coverage</th></tr></thead>
         <tbody>
+          <tr><td><code>contracts/output_type.py</code> — sanity-check quality gate</td><td class="num">99%</td></tr>
           <tr><td><code>repair/knowledge.py</code> — cross-run learning</td><td class="num">99%</td></tr>
-          <tr><td><code>scouts/workflow_scout.py</code></td><td class="num">94%</td></tr>
-          <tr><td><code>repair/agent.py</code></td><td class="num">85%</td></tr>
-          <tr><td><code>repair/loop.py</code></td><td class="num">84%</td></tr>
-          <tr><td><b>Total</b></td><td class="num"><b>84%</b></td></tr>
+          <tr><td><code>scouts/python_scout.py</code></td><td class="num">91%</td></tr>
+          <tr><td><code>repair/agent.py</code></td><td class="num">88%</td></tr>
+          <tr><td><code>repair/loop.py</code></td><td class="num">87%</td></tr>
+          <tr><td><b>Total</b></td><td class="num"><b>86%</b></td></tr>
         </tbody>
       </table>
     </div>
     <p class="muted">Uncovered lines are overwhelmingly Docker-daemon and optional-dependency paths
-    marked <code># pragma: no cover</code>, plus CLI wiring exercised by the integration tests.</p>
+    marked <code># pragma: no cover</code>, plus CLI wiring exercised by the integration tests.
+    A large share of these tests are regressions pinned from real resurrection runs — agent amnesia,
+    no-op command loops, mis-typed sanity checks, and unrecorded environment repairs were all found
+    by watching Jeeva work, then fixed and locked down.</p>
+  </section>
+
+  <section>
+    <h2>What watching it work taught us</h2>
+    <p>Every mechanism below exists because a real run failed without it.</p>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="verb">Working memory</span></h3>
+        <p>The first PyPore attempt burned <b>38 turns re-reading the same two files</b>, probing past
+        end-of-file and grepping for a class that does not exist. The agent saw only the last 800 chars
+        of output and nothing from earlier turns. It now writes durable <em>notes</em> replayed into
+        every later prompt, and the loop refuses to re-run an inspection that cannot reveal anything
+        new. The same resurrection then finished in 22 turns.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">Repairs ≠ diffs</span></h3>
+        <p>A successful run once recorded <b>zero</b> bugs fixed, because fixes were only counted when
+        the agent emitted a source patch. Repointing a dead apt mirror or installing a missing compiler
+        produces no diff — yet those are the most reusable findings there are. They now count, and they
+        seed the cross-run lesson store.</p>
+      </div>
+      <div class="card">
+        <h3><span class="verb">Honest recipes</span></h3>
+        <p>The emitted <code>smoke_test.sh</code> replayed every command including orientation greps,
+        and claimed a <code>git clone</code> made it runnable anywhere while its commands referenced
+        container-absolute paths. It now replays only state-changing steps and guards on the path it
+        genuinely needs.</p>
+      </div>
+    </div>
   </section>
 
   <section>
@@ -238,11 +298,14 @@ export ANTHROPIC_API_KEY=sk-...
     current traceback and a stored symptom. Enough to surface <em>“last time a TensorFlow 1.x tool hit
     a missing-AVX abort, a non-AVX build fixed it”</em> exactly when the agent is staring at that
     traceback — without pulling in an embedding model.</p>
+    <p>A repair is <b>not only a source edit</b>. Repointing a dead apt mirror, installing a missing
+    compiler, or pinning a dependency to its commit era all fix real decay, and they are the most
+    reusable things a run discovers. The PyPore resurrection produced four such lessons — the first
+    real entries in the store.</p>
     <div class="note">
       Lessons are injected as <b>hints, not instructions</b>. The prompt tells the agent to verify
       before trusting one, and PASS is still decided only by a real exit code — so a wrong lesson
-      cannot poison a later run. The store starts empty; it begins paying off once a genuinely
-      decayed tool gets repaired.
+      cannot poison a later run.
     </div>
   </section>
 
