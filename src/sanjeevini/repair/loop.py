@@ -695,8 +695,9 @@ class RepairLoop:
             last_rc, last_out, last_err = result.returncode, result.stdout, result.stderr
 
             # Record the successful commands, in order — this is the reproduction
-            # recipe emitted as a self-contained smoke test.
-            if result.ok:
+            # recipe emitted as a smoke test. Inspection commands are dropped:
+            # they are how the agent learned, not steps in reproducing the result.
+            if result.ok and (not is_read_only(action.cmd) or action.is_sanity_check):
                 reproduction.append(list(action.cmd))
 
             # A dead container can't be repaired in place; bail after a few in a row.
@@ -709,13 +710,18 @@ class RepairLoop:
             else:
                 sandbox_errors = 0
 
-            if action.patch:
-                patch_history.append(action.patch)
+            # A repair does not have to be a source diff. Rewriting a dead apt
+            # mirror or installing a missing compiler fixes real decay and is the
+            # most reusable knowledge a run produces — requiring a patch here is
+            # what left the lesson store empty after a successful resurrection.
+            if action.patch or action.bug_class:
+                if action.patch:
+                    patch_history.append(action.patch)
                 bugs_fixed.append(
                     {
                         "class": action.bug_class or "unknown",
                         "description": action.bug_description,
-                        "patch": action.patch,
+                        "patch": action.patch or "",
                         # The traceback this patch was a response to — the
                         # "symptom" half of the lesson learned from this fix.
                         "symptom": error_signature(state.last_stderr),
@@ -926,32 +932,60 @@ class RepairLoop:
         )
 
     def _smoke_test(self, outcome: RepairOutcome) -> str:
-        """Emit a self-contained reproduction script.
+        """Emit the reproduction script for a passing run.
 
-        Replays every command that succeeded during the run, in order, ending
-        with the sanity check. Each command runs in its own subshell starting
-        from the script's directory — exactly as the sandbox executed it (a
-        fresh working directory per exec) — so ``cd repo && …`` steps replay
-        correctly. The repo is cloned first if it isn't already present, making
-        the script runnable from a bare base image, not just the final image.
+        Replays the state-changing commands that succeeded, in order, ending with
+        the sanity check; each runs in its own subshell, exactly as the sandbox
+        executed it. Inspection commands are already excluded — they are how the
+        agent learned, not steps in reproducing the result.
+
+        Commands that reference an absolute container path only make sense inside
+        the resurrected image, so the script guards on that path rather than
+        cloning and pretending it will work from a bare base image.
         """
         header = (
             "#!/usr/bin/env bash\n"
-            f"# Self-contained reproduction of {self.spec.tool_slug} "
-            f"(emitted by Jeeva {JEEVA_VERSION}).\n"
+            f"# Reproduction of {self.spec.tool_slug} (emitted by Jeeva {JEEVA_VERSION}).\n"
             f"# Replays the verified command chain; success criterion:\n"
             f"#   {self.spec.sanity_check}\n"
             "set -euo pipefail\n"
-            'cd "$(cd "$(dirname "$0")" && pwd)"\n'
         )
         if not outcome.reproduction:
             return header + "echo 'no reproduction was captured' >&2\nexit 1\n"
 
-        lines = []
-        if self.spec.repo_url:
-            lines.append(f"[ -d repo ] || git clone --depth 1 -- {self.spec.repo_url} repo")
+        joined = " ".join(shlex.join(cmd) for cmd in outcome.reproduction)
+        anchor = self._container_anchor(joined)
+        lines: list[str] = []
+        if anchor:
+            # The recipe is written against the image's own layout.
+            header += (
+                f"# Run this INSIDE the resurrected image ({outcome.final_image or 'see above'}):\n"
+                f"#   docker run --rm {outcome.final_image or '<image>'} bash smoke_test.sh\n"
+            )
+            lines.append(
+                f'[ -d {anchor} ] || {{ echo "{anchor} not found — run this inside the '
+                f'resurrected image, not a bare base image" >&2; exit 1; }}'
+            )
+        else:
+            header += 'cd "$(cd "$(dirname "$0")" && pwd)"\n'
+            if self.spec.repo_url:
+                lines.append(f"[ -d repo ] || git clone --depth 1 -- {self.spec.repo_url} repo")
         lines += [f"( {shlex.join(cmd)} )" for cmd in outcome.reproduction]
         return header + "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _container_anchor(commands: str) -> str:
+        """Return the absolute container directory the recipe depends on, if any.
+
+        Args:
+            commands: The reproduction commands joined into one string.
+
+        Returns:
+            The matched path (e.g. ``/workspace/repo``), or ``""`` if the recipe
+            uses only relative paths and can run anywhere.
+        """
+        match = re.search(r"(/(?:workspace|work|opt|srv)/[A-Za-z0-9._-]+)", commands)
+        return match.group(1) if match else ""
 
     def _reproduce_md(self, outcome: RepairOutcome) -> str:
         verdict_line = {

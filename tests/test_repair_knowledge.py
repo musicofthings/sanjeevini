@@ -266,3 +266,67 @@ def test_agent_without_a_store_omits_the_lessons_section() -> None:
 
 def test_render_state_omits_the_section_for_an_empty_lesson_list() -> None:
     assert "Prior experience" not in render_state(_spec(), _state("boom"), [])
+
+
+# ---------------------------------------------------------------------------
+# Environment repairs are fixes too
+# ---------------------------------------------------------------------------
+
+
+def test_an_environment_repair_without_a_patch_is_recorded(tmp_path: Path) -> None:
+    # The PyPore regression: the agent repointed a dead apt mirror and installed
+    # a missing compiler — real repairs of real decay — but recorded nothing,
+    # because bugs_fixed only populated when a source diff was emitted.
+    store = KnowledgeStore(tmp_path / "k.json")
+    agent = ScriptedAgent(
+        [
+            RepairAction(kind="exec", cmd=["apt-get", "update"]),
+            RepairAction(
+                kind="exec",
+                cmd=["fix-sources"],
+                bug_class="dead_mirror",
+                bug_description="repointed sources.list at archive.debian.org",
+                is_sanity_check=True,
+            ),
+        ]
+    )
+    sandbox = FakeSandbox([1, 0], stderr="E: Failed to fetch deb.debian.org")
+    outcome = RepairLoop(
+        _spec(), sandbox, agent, contracts_root=tmp_path / "contracts", knowledge=store
+    ).run()
+
+    assert outcome.verdict == "PASS"
+    assert len(outcome.bugs_fixed) == 1
+    assert outcome.bugs_fixed[0]["class"] == "dead_mirror"
+    assert outcome.bugs_fixed[0]["patch"] == ""
+
+    stored = KnowledgeStore(tmp_path / "k.json").all()
+    assert len(stored) == 1
+    assert stored[0].fix == "repointed sources.list at archive.debian.org"
+    assert stored[0].symptom == "E: Failed to fetch deb.debian.org"
+
+
+def test_a_turn_with_neither_patch_nor_bug_class_records_nothing(tmp_path: Path) -> None:
+    agent = ScriptedAgent([RepairAction(kind="exec", cmd=["ok"], is_sanity_check=True)])
+    outcome = RepairLoop(
+        _spec(), FakeSandbox([0]), agent, contracts_root=tmp_path / "contracts"
+    ).run()
+    assert outcome.bugs_fixed == []
+
+
+def test_a_source_patch_still_lands_in_patch_history(tmp_path: Path) -> None:
+    agent = ScriptedAgent(
+        [
+            RepairAction(
+                kind="exec",
+                cmd=["fix"],
+                patch="--- a\n+++ b\n+x",
+                bug_class="api_drift",
+                is_sanity_check=True,
+            )
+        ]
+    )
+    outcome = RepairLoop(
+        _spec(), FakeSandbox([0]), agent, contracts_root=tmp_path / "contracts"
+    ).run()
+    assert outcome.bugs_fixed[0]["patch"] == "--- a\n+++ b\n+x"

@@ -94,6 +94,9 @@ YOU HAVE NO MEMORY BETWEEN TURNS except (a) the last command's output and (b) th
 "notes" you write. Everything else you read is GONE next turn. So:
 - Put every durable finding in "notes": the file layout, real function/class
   signatures, what you have already ruled out, and what a file does NOT contain.
+  Notes are FACTS, not narration. Write "core.py is 261 lines; defines only
+  MetaSegment and Segment; no Event class" — never "continuing to inspect
+  core.py". A note that does not state a fact is wasted.
 - Never re-read a file you have already read — check your notes first. If a file
   is shorter than you expected, record its true length and move on.
 - Notes are cheap and re-reading is expensive. Write them on EVERY turn that
@@ -106,10 +109,18 @@ patches applied so far. Reply with a SINGLE JSON object and nothing else:
   {"action": "exec",
    "cmd": ["bash", "-lc", "<one shell command>"],
    "is_sanity_check": false,
-   "patch": "<unified diff, if this command applied a fix, else omit>",
-   "bug_class": "<dead_endpoint|dep_conflict|missing_binary|api_drift|...>",
-   "bug_description": "<one line, if a fix was applied>",
+   "patch": "<unified diff, ONLY if this command changed source code>",
+   "bug_class": "<dead_mirror|missing_toolchain|dep_conflict|build_failure|
+                  dead_endpoint|missing_binary|api_drift|...>",
+   "bug_description": "<one line: what was broken and what fixed it>",
    "notes": "<durable findings to carry forward — see above>"}
+
+Set "bug_class" and "bug_description" on EVERY turn that repairs something,
+whether or not there is a diff. A repair is not only a source edit: repointing a
+dead apt mirror, installing a missing compiler, pinning a dependency to its
+commit era, or fixing a build flag are all repairs of real decay, and they are
+the most reusable things you will discover. Omit "patch" when no source file
+changed — but still name the bug.
 
 or, only when an environmental blocker makes success impossible:
 

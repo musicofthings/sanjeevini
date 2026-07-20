@@ -167,3 +167,75 @@ def test_found_files_are_capped(tmp_path: Path) -> None:
     sandbox = ProbeSandbox(probe_stdout="\n".join(f"./f{i}.bam" for i in range(50)))
     outcome = _run(BAM_CHECK, sandbox, tmp_path)
     assert len(outcome.evidence.found) == 20
+
+
+# ---------------------------------------------------------------------------
+# Reproduction recipe quality
+# ---------------------------------------------------------------------------
+
+
+def _run_cmds(cmds: list[RepairAction], sandbox: ProbeSandbox, tmp_path: Path):
+    spec = ResurrectionSpec(
+        tool_slug="foo",
+        goal="g",
+        sanity_check=BAM_CHECK,
+        base_image="python:2.7-slim",
+        repo_url="https://github.com/acme/foo",
+    )
+    return RepairLoop(spec, sandbox, ScriptedAgent(cmds), contracts_root=tmp_path).run()
+
+
+def test_inspection_commands_are_excluded_from_the_reproduction(tmp_path: Path) -> None:
+    # They are how the agent learned, not steps in reproducing the result.
+    outcome = _run_cmds(
+        [
+            RepairAction(kind="exec", cmd=["bash", "-lc", "grep -n foo parsers.py"]),
+            RepairAction(kind="exec", cmd=["bash", "-lc", "sed -n '1,80p' core.py"]),
+            RepairAction(kind="exec", cmd=["bash", "-lc", "pip install numpy==1.16.6"]),
+            RepairAction(kind="exec", cmd=["bash", "-lc", "python prove.py"], is_sanity_check=True),
+        ],
+        ProbeSandbox(probe_stdout="./x.bam\n"),
+        tmp_path,
+    )
+    replayed = [c[-1] for c in outcome.reproduction]
+    assert replayed == ["pip install numpy==1.16.6", "python prove.py"]
+
+
+def test_a_sanity_check_is_kept_even_if_it_looks_like_inspection(tmp_path: Path) -> None:
+    outcome = _run_cmds(
+        [RepairAction(kind="exec", cmd=["bash", "-lc", "cat out.json"], is_sanity_check=True)],
+        ProbeSandbox(probe_stdout="./x.bam\n"),
+        tmp_path,
+    )
+    assert [c[-1] for c in outcome.reproduction] == ["cat out.json"]
+
+
+def test_a_container_path_recipe_guards_instead_of_cloning(tmp_path: Path) -> None:
+    # Absolute container paths only exist in the resurrected image; claiming a
+    # git clone makes the script runnable anywhere would be a lie.
+    _run_cmds(
+        [
+            RepairAction(
+                kind="exec",
+                cmd=["bash", "-lc", "cd /workspace/repo && python prove.py"],
+                is_sanity_check=True,
+            )
+        ],
+        ProbeSandbox(probe_stdout="./x.bam\n"),
+        tmp_path,
+    )
+    script = (tmp_path / "foo" / "smoke_test.sh").read_text()
+    assert "git clone" not in script
+    assert "[ -d /workspace/repo ]" in script
+    assert "run this inside the resurrected image" in script
+
+
+def test_a_relative_recipe_still_clones(tmp_path: Path) -> None:
+    _run_cmds(
+        [RepairAction(kind="exec", cmd=["bash", "-lc", "python prove.py"], is_sanity_check=True)],
+        ProbeSandbox(probe_stdout="./x.bam\n"),
+        tmp_path,
+    )
+    script = (tmp_path / "foo" / "smoke_test.sh").read_text()
+    assert "git clone --depth 1 -- https://github.com/acme/foo repo" in script
+    assert "[ -d /workspace" not in script
