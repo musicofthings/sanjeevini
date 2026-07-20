@@ -58,7 +58,11 @@ from sanjeevini.repair.knowledge import (
 )
 from sanjeevini.sandbox.checkpoint import CheckpointStore, TurnRecord
 from sanjeevini.sandbox.docker_sandbox import DockerError, DockerSandbox, ExecResult
-from sanjeevini.scouts.python_scout import PythonResurrectionPlan, PythonScout
+from sanjeevini.scouts.python_scout import (
+    PythonResurrectionPlan,
+    PythonScout,
+    ensure_falsifiable,
+)
 from sanjeevini.scouts.r_scout import RResurrectionPlan, RScout
 from sanjeevini.scouts.repo import RepoSnapshot, parse_repo_url
 from sanjeevini.scouts.workflow_scout import (
@@ -203,6 +207,67 @@ class ResurrectionSpec:
     gpu_required: bool = False
     entry_command: str = ""
     framework: str = ""
+
+
+@dataclass
+class GoalOverride:
+    """A goal and/or sanity check supplied by ``--goal-file``.
+
+    Attributes:
+        goal: Replacement goal statement, or ``""`` to keep the Scout's.
+        sanity_check: Replacement pass criterion, or ``""`` to keep the Scout's.
+    """
+
+    goal: str = ""
+    sanity_check: str = ""
+
+
+def parse_goal_file(path: Path) -> GoalOverride:
+    """Parse a ``--goal-file`` into a :class:`GoalOverride`.
+
+    Accepts either plain text (the whole file is the goal) or YAML with ``goal``
+    and/or ``sanity_check`` keys. A supplied sanity check is held to the same
+    falsifiability bar as a Scout-generated one — overriding the criterion must
+    not be a way to smuggle in an unfalsifiable claim.
+
+    Args:
+        path: Path to the goal file.
+
+    Returns:
+        The parsed override.
+
+    Raises:
+        OSError: If the file cannot be read.
+        ValueError: If the YAML is malformed, both keys are absent from a
+            mapping, or the sanity check is not falsifiable.
+    """
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"{path} is empty")
+
+    parsed: object = None
+    with contextlib.suppress(yaml.YAMLError):
+        parsed = yaml.safe_load(text)
+
+    if isinstance(parsed, dict):
+        goal = str(parsed.get("goal", "") or "").strip()
+        sanity_check = str(parsed.get("sanity_check", "") or "").strip()
+        if not goal and not sanity_check:
+            raise ValueError(f"{path} has neither a 'goal:' nor a 'sanity_check:' key")
+    else:
+        goal, sanity_check = text, ""
+
+    if sanity_check:
+        ensure_falsifiable(sanity_check)
+    return GoalOverride(goal=goal, sanity_check=sanity_check)
+
+
+def _apply_override(spec: ResurrectionSpec, override: GoalOverride) -> None:
+    """Apply a :class:`GoalOverride` in place, leaving empty fields untouched."""
+    if override.goal:
+        spec.goal = override.goal
+    if override.sanity_check:
+        spec.sanity_check = override.sanity_check
 
 
 def _gpu_from_image(base_image: str) -> bool:
@@ -1131,8 +1196,13 @@ class ResurrectCommand:
         with tempfile.TemporaryDirectory(prefix="jeeva-resurrect-") as tmp:
             repo_dir = Path(tmp) / "repo"
             commit = self._clone(url, repo_dir)
-            plan = asyncio.run(select_plan(repo_dir, url, confirm=not self.args.no_scout))
-            spec = spec_from_plan(plan, url=url, repo_commit=commit)
+            override = self._goal_override()
+            if self.args.no_scout:
+                spec = self._spec_without_scout(url, commit, override)
+            else:
+                plan = asyncio.run(select_plan(repo_dir, url, confirm=True))
+                spec = spec_from_plan(plan, url=url, repo_commit=commit)
+                _apply_override(spec, override)
             if self.args.image:
                 spec.base_image = self.args.image
 
@@ -1168,6 +1238,48 @@ class ResurrectCommand:
                     sandbox.stop(force=True)
 
         self._report(outcome)
+
+    def _goal_override(self) -> GoalOverride:
+        """Read and validate ``--goal-file``, or return an empty override.
+
+        Exits cleanly (status 1) on an unreadable file, malformed YAML, or a
+        sanity check that is not falsifiable — a bad criterion must be rejected
+        before a container starts, not discovered after a meaningless PASS.
+        """
+        if not self.args.goal_file:
+            return GoalOverride()
+        try:
+            override = parse_goal_file(Path(self.args.goal_file))
+        except (OSError, ValueError) as exc:
+            print(f"could not use --goal-file: {exc}", file=sys.stderr)
+            sys.exit(1)
+        return override
+
+    def _spec_without_scout(
+        self, url: str, commit: str, override: GoalOverride
+    ) -> ResurrectionSpec:
+        """Build a spec straight from the CLI, with no Scout involved.
+
+        Requires ``--image`` and a ``--goal-file`` supplying both a goal and a
+        sanity check: with the Scout skipped there is nothing else to derive
+        them from, and a resurrection without a falsifiable criterion cannot
+        mean anything.
+        """
+        if not self.args.image or not override.goal or not override.sanity_check:
+            print(
+                "--no-scout requires --image and a --goal-file providing both "
+                "'goal:' and 'sanity_check:'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return ResurrectionSpec(
+            tool_slug=tool_slug(url),
+            goal=override.goal,
+            sanity_check=override.sanity_check,
+            base_image=self.args.image,
+            repo_url=url,
+            repo_commit=commit,
+        )
 
     @staticmethod
     def _clone(url: str, dest: Path) -> str:

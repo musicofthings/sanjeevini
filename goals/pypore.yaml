@@ -1,0 +1,47 @@
+goal: >-
+  Resurrect PyPore (jmschrei/PyPore, last commit January 2015) as a faithful
+  Python 2.7 revival — run the code as its authors wrote it, repairing only what
+  rotted. Do NOT port it to Python 3.
+
+  Known decay, confirmed by inspection before this run:
+
+  - The code is Python 2 only. PyPore/alignment.py and PyPore/DataTypes.py do not
+    even parse under Python 3 (bare `print` statements); there are 31 uses of
+    xrange/iteritems/has_key across the package.
+  - setup.py's non-Cython branch compiles PyPore/cparsers.c and
+    PyPore/calignment.c, but NEITHER .c FILE IS IN THE REPO. Only the .pyx
+    sources ship, so Cython is mandatory to build.
+  - The .pyx sources are Python 2 as well: `from itertools import izip` and an
+    implicit relative `from core import Segment`. Use a Cython 0.29.x release
+    with language_level=2; Cython 3 will reject them.
+  - Era-appropriate pins for a 2015 codebase on 2.7: numpy==1.16.6,
+    scipy==1.2.3, matplotlib==2.2.5, cython==0.29.37.
+  - MySQLdb and PyQt4 are imported by database.py / the GUI paths. They are
+    optional to the scientific core — do not install them. If an import of them
+    blocks the code path you need, guard or stub the import rather than chasing
+    those dead packages.
+  - PyPI over TLS from a python:2.7 image can need
+    `pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org`
+    or a `get-pip.py` bootstrap. Prefer the repo's own vendored pip if present.
+
+  There is NO test data in the repository. The tutorial notebook loads
+  14418008-s04.abf and siblings; those are UCSC Nanopore Group instrument files
+  that were never committed and are not retrievable. Do not attempt to download
+  them and do not fabricate an .abf binary.
+
+  Instead, prove the scientific core on a synthetic current trace you generate
+  yourself with numpy: a baseline ionic current with a known number of injected
+  blockade events (downward steps of distinct depth and duration). PyPore's
+  parsers operate directly on a current array — see PyPore/parsers.py, classes
+  lambda_event_parser and SpeedyStatSplit, both of which expose .parse(current).
+  Feed your synthetic trace to the event detector, segment the detected events,
+  and serialise the result to JSON via the to_json path in PyPore/core.py.
+
+  Write the proof as a single script at /workspace/repo/prove.py so the
+  reproduction is self-contained, and make the sanity-check command run it.
+
+sanity_check: >-
+  Running prove.py on a synthetic current trace with 12 injected blockade events
+  exits 0, PyPore's event detector recovers ≥ 10 of them, each detected event
+  segments into ≥ 1 state, and the serialised JSON output parses and is a
+  non-empty object.

@@ -30,7 +30,13 @@ def _add_resurrect(sub: SubParsers) -> None:
     p.add_argument("url", help="GitHub URL of the target repo.")
     p.add_argument("--image", help="Override the base Docker image (skips Scout image selection).")
     p.add_argument(
-        "--goal-file", metavar="FILE", help="Override Scout goal with a local text file."
+        "--goal-file",
+        metavar="FILE",
+        help=(
+            "Override the Scout's goal and/or sanity check. Plain text sets the goal; "
+            "YAML with 'goal:' and/or 'sanity_check:' keys sets either or both. A "
+            "sanity check supplied here must still be falsifiable."
+        ),
     )
     p.add_argument(
         "--workdir", default="/workspace", help="Working directory inside the container."
@@ -52,7 +58,7 @@ def _add_resurrect(sub: SubParsers) -> None:
     p.add_argument(
         "--no-scout",
         action="store_true",
-        help="Skip Scout phase; --image and --goal-file required.",
+        help="Skip the Scout entirely; requires --image and --goal-file.",
     )
     p.add_argument(
         "--docker-host",
