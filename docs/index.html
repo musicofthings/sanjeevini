@@ -71,6 +71,15 @@
   }
   ol.phases b { font-weight: 650; }
   .note { border-left: 3px solid var(--accent-2); background: var(--card); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin: 18px 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .stat .n { font-size: 1.7rem; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .tablewrap { overflow-x: auto; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); }
+  th { font-weight: 650; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-variant-numeric: tabular-nums; }
   footer { margin: 56px 0 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
   .toggle { position: fixed; top: 14px; right: 14px; background: var(--card); border: 1px solid var(--line); color: var(--fg);
     border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
@@ -90,6 +99,7 @@
       <span class="badge">Nextflow · Snakemake · WDL</span>
       <span class="badge">Typed genomic I/O</span>
       <span class="badge">MCP server</span>
+      <span class="badge">229 tests · 84% coverage</span>
     </div>
   </div>
 </header>
@@ -180,6 +190,63 @@ export ANTHROPIC_API_KEY=sk-...
   </section>
 
   <section>
+    <h2>Proof it works</h2>
+
+    <h3>A real resurrection</h3>
+    <p><code>a-slide/pycoQC</code> — an archived Oxford Nanopore read-QC tool:</p>
+    <div class="stats">
+      <div class="stat"><div class="n">PASS</div><div class="l">verdict, in 9 turns</div></div>
+      <div class="stat"><div class="n">783 MB</div><div class="l"><code>sanjeevini/pycoqc:resurrected</code></div></div>
+      <div class="stat"><div class="n">1.77 MB</div><div class="l">HTML report + valid JSON, exit 0</div></div>
+    </div>
+    <p class="muted"><code>bash smoke_test.sh</code> replays the verified command chain in a clean container.</p>
+    <div class="note">
+      <b>Two honest caveats on this run.</b> <code>bugs_fixed</code> was empty — pycoQC still installs
+      cleanly, so this is a <em>still-runs</em> case rather than a repair, and the repair heuristics
+      were not exercised. And <code>cost_usd</code> reads <code>0.0</code> because token pricing is not
+      yet wired into the provenance record.
+    </div>
+
+    <h3>Test suite</h3>
+    <pre>229 passed, 6 deselected  <span class="c">·</span>  84% coverage (2424 statements)
+<span class="c">ruff check + ruff format + mypy --strict: clean across src/ and tests/</span></pre>
+    <p class="muted">The 6 deselected are <code>-m integration</code> tests needing a live Docker daemon and
+    network; <code>pytest -m "not integration"</code> is the CI gate.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Subsystem</th><th>Coverage</th></tr></thead>
+        <tbody>
+          <tr><td><code>repair/knowledge.py</code> — cross-run learning</td><td class="num">99%</td></tr>
+          <tr><td><code>scouts/workflow_scout.py</code></td><td class="num">94%</td></tr>
+          <tr><td><code>repair/agent.py</code></td><td class="num">85%</td></tr>
+          <tr><td><code>repair/loop.py</code></td><td class="num">84%</td></tr>
+          <tr><td><b>Total</b></td><td class="num"><b>84%</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Uncovered lines are overwhelmingly Docker-daemon and optional-dependency paths
+    marked <code># pragma: no cover</code>, plus CLI wiring exercised by the integration tests.</p>
+  </section>
+
+  <section>
+    <h2>It gets smarter every run</h2>
+    <p>Each resurrection that repairs something teaches the next one. The loop records every applied
+    patch as a lesson — the traceback it responded to (the <em>symptom</em>), the fix, and the
+    framework — into a store under the cache root. On the next run the agent retrieves the relevant
+    lessons and injects them into its prompt.</p>
+    <p>Relevance is deliberately dependency-free: a framework match plus keyword overlap between the
+    current traceback and a stored symptom. Enough to surface <em>“last time a TensorFlow 1.x tool hit
+    a missing-AVX abort, a non-AVX build fixed it”</em> exactly when the agent is staring at that
+    traceback — without pulling in an embedding model.</p>
+    <div class="note">
+      Lessons are injected as <b>hints, not instructions</b>. The prompt tells the agent to verify
+      before trusting one, and PASS is still decided only by a real exit code — so a wrong lesson
+      cannot poison a later run. The store starts empty; it begins paying off once a genuinely
+      decayed tool gets repaired.
+    </div>
+  </section>
+
+  <section>
     <h2>Use it from an agent (MCP)</h2>
     <p>Start the stdio server and register it. Every verb becomes a callable tool.</p>
     <pre><span class="c">// .mcp.json</span>
@@ -200,6 +267,7 @@ export ANTHROPIC_API_KEY=sk-...
       <li><b>Repair loop</b> — build → run → read the real traceback → patch → retry, checkpointing each turn; emit a contract on PASS.</li>
       <li><b>Registry</b> — a searchable catalog of every revived tool, with typed contracts and provenance.</li>
       <li><b>Compose</b> — wire bricks into pipelines; genomic I/O types are checked before any container starts.</li>
+      <li><b>Learn</b> — every fix is banked as a <code>symptom → fix</code> lesson and retrieved on later runs, so each resurrection starts smarter than the last.</li>
     </ol>
   </section>
 
