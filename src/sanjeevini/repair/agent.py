@@ -31,7 +31,7 @@ from sanjeevini.repair.knowledge import KnowledgeStore, Lesson
 from sanjeevini.repair.loop import RepairAction
 
 if TYPE_CHECKING:
-    from sanjeevini.repair.loop import LoopState, ResurrectionSpec
+    from sanjeevini.repair.loop import LoopState, ResurrectionSpec, TurnOutcome
 
 # complete(system, user) -> (reply_text, cost_usd)
 Completion = Callable[[str, str], "tuple[str, float]"]
@@ -61,10 +61,25 @@ _ACTION_TOOL = {
             "bug_description": {"type": "string"},
             "reason": {"type": "string"},
             "timeout": {"type": "integer"},
+            "notes": {
+                "type": "string",
+                "description": (
+                    "Durable findings to carry forward — the ONLY thing you will "
+                    "still know next turn besides the last command's output. Record "
+                    "what you learned (file layout, real API signatures, what a file "
+                    "does NOT contain, what you already ruled out)."
+                ),
+            },
         },
         "required": ["action"],
     },
 }
+
+# Output budgets. These were 800/2000, which was far too small: a 7 KB file read
+# left the agent with 11% of what it saw and nothing at all one turn later, so it
+# re-read the same files indefinitely instead of making progress.
+_MAX_STDOUT_CHARS = 6000
+_MAX_STDERR_CHARS = 4000
 
 RESURRECTION_SYSTEM_PROMPT = """\
 You are Jeeva: you resurrect dead research code and make a buried capability
@@ -75,16 +90,26 @@ sandbox. The target repository is already checked out in your working directory
 (run `ls` first to orient). Container state persists across your commands, so an
 install in one turn is still there the next. You cannot touch the host.
 
+YOU HAVE NO MEMORY BETWEEN TURNS except (a) the last command's output and (b) the
+"notes" you write. Everything else you read is GONE next turn. So:
+- Put every durable finding in "notes": the file layout, real function/class
+  signatures, what you have already ruled out, and what a file does NOT contain.
+- Never re-read a file you have already read — check your notes first. If a file
+  is shorter than you expected, record its true length and move on.
+- Notes are cheap and re-reading is expensive. Write them on EVERY turn that
+  taught you something.
+
 Each turn you receive the goal, the falsifiable sanity check, the last command's
-exit code and stderr (the traceback to read), and the patches applied so far.
-Reply with a SINGLE JSON object and nothing else:
+exit code and stderr (the traceback to read), your accumulated notes, and the
+patches applied so far. Reply with a SINGLE JSON object and nothing else:
 
   {"action": "exec",
    "cmd": ["bash", "-lc", "<one shell command>"],
    "is_sanity_check": false,
    "patch": "<unified diff, if this command applied a fix, else omit>",
    "bug_class": "<dead_endpoint|dep_conflict|missing_binary|api_drift|...>",
-   "bug_description": "<one line, if a fix was applied>"}
+   "bug_description": "<one line, if a fix was applied>",
+   "notes": "<durable findings to carry forward — see above>"}
 
 or, only when an environmental blocker makes success impossible:
 
@@ -92,7 +117,9 @@ or, only when an environmental blocker makes success impossible:
 
 Method:
 1. ORIENT — explore the repo; find the real code path from a fresh input to the
-   headline output.
+   headline output. Budget a handful of turns for this, not dozens: read a file
+   ONCE, record what matters in notes, then move to REVIVE. If you have spent
+   several turns reading without running anything, stop reading and run something.
 2. REVIVE — run it. On failure, read the ACTUAL traceback and fix THAT cause with
    the smallest change that works. Re-run to confirm.
 3. CARVE — reduce to the minimal command from one input to the output.
@@ -144,10 +171,24 @@ def render_state(
         lines.append(f"\nLast command exit code: {state.last_returncode}")
         stderr = state.last_stderr.strip()
         if stderr:
-            lines.append("Last stderr (tail):\n" + _tail(stderr, 2000))
+            lines.append("Last stderr (tail):\n" + _tail(stderr, _MAX_STDERR_CHARS))
         stdout = state.last_stdout.strip()
         if stdout:
-            lines.append("Last stdout (tail):\n" + _tail(stdout, 800))
+            lines.append("Last stdout (tail):\n" + _tail(stdout, _MAX_STDOUT_CHARS))
+        elif state.last_returncode == 0:
+            # An empty result is information: the file ended, the pattern is absent.
+            lines.append(
+                "Last stdout was EMPTY. The command succeeded but produced nothing — "
+                "the range is past end-of-file, or the pattern does not occur. Do not "
+                "re-probe the same file; record this in notes and move on."
+            )
+
+    if state.notes:
+        lines.append(
+            "\nWhat you have already established (your notes — this is your only "
+            "memory of earlier turns):"
+        )
+        lines.extend(f"  - {note}" for note in state.notes)
 
     if lessons:
         lines.append(
@@ -161,13 +202,53 @@ def render_state(
         lines.extend(f"  - {_first_line(p)}" for p in state.patch_history)
 
     if state.history:
-        lines.append("\nRecent commands this run:")
-        for turn in state.history[-5:]:
+        lines.append("\nCommands already run this run (do not repeat these):")
+        for turn in state.history[-12:]:
             status = "ok" if turn.ok else f"exit {turn.returncode}"
-            lines.append(f"  [{status}] {' '.join(turn.action.cmd)}")
+            size = len(turn.stdout)
+            lines.append(f"  [{status}, {size}b out] {' '.join(turn.action.cmd)}")
+
+    stalled = _reading_without_progress(state.history)
+    if stalled:
+        lines.append(
+            f"\nSTOP: your last {stalled} commands only inspected files without "
+            "changing or running anything. You are not making progress. Write what "
+            "you know into notes and take a concrete action now — install a "
+            "dependency, build the package, or run the code."
+        )
 
     lines.append("\nReply with the single JSON action object for your next command.")
     return "\n".join(lines)
+
+
+# Commands that only look at things; a run of these means no progress is happening.
+_READ_ONLY_RE = re.compile(
+    r"^\s*(ls|cat|sed|grep|head|tail|find|wc|file|stat|awk|less|more|nl|pwd|tree)\b"
+)
+# Consecutive read-only turns tolerated before the prompt calls it out.
+_STALL_LIMIT = 6
+
+
+def _reading_without_progress(history: list[TurnOutcome]) -> int:
+    """Return the length of the trailing run of purely inspective commands.
+
+    Orienting is necessary; orienting forever is the failure mode this catches —
+    an agent that re-reads files instead of acting will otherwise burn its whole
+    turn budget looking busy.
+
+    Args:
+        history: The turns taken so far this run.
+
+    Returns:
+        The trailing read-only streak, or ``0`` if below :data:`_STALL_LIMIT`.
+    """
+    streak = 0
+    for turn in reversed(history):
+        payload = turn.action.cmd[-1] if turn.action.cmd else ""
+        if turn.action.patch or not _READ_ONLY_RE.match(payload):
+            break
+        streak += 1
+    return streak if streak >= _STALL_LIMIT else 0
 
 
 def _tail(text: str, limit: int) -> str:
@@ -227,6 +308,7 @@ def parse_action(text: str) -> RepairAction:
         bug_class=str(data["bug_class"]) if data.get("bug_class") else None,
         bug_description=str(data.get("bug_description", "")),
         timeout=int(timeout) if isinstance(timeout, (int, str)) else 300,
+        notes=str(data.get("notes", "")).strip(),
     )
 
 

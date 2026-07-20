@@ -345,6 +345,8 @@ class RepairAction:
         reason: Why the agent gave up (``kind == "give_up"``).
         cost_usd: Agent cost accrued producing this action.
         timeout: Per-command timeout in seconds.
+        notes: Durable findings the agent wants carried into later turns — its
+            only memory of this run besides the previous command's output.
     """
 
     kind: Literal["exec", "give_up"]
@@ -356,6 +358,7 @@ class RepairAction:
     reason: str = ""
     cost_usd: float = 0.0
     timeout: int = 300
+    notes: str = ""
 
 
 @dataclass
@@ -389,6 +392,7 @@ class LoopState:
         last_stderr: Stderr of the previous turn (the traceback to read).
         patch_history: Diffs applied so far this run.
         history: Prior :class:`TurnOutcome` records this run.
+        notes: Findings the agent recorded on earlier turns — its working memory.
     """
 
     turn: int
@@ -401,6 +405,7 @@ class LoopState:
     last_stderr: str
     patch_history: list[str]
     history: list[TurnOutcome]
+    notes: list[str] = field(default_factory=list)
 
 
 class RepairAgent(Protocol):
@@ -516,6 +521,37 @@ class RepairOutcome:
 # ---------------------------------------------------------------------------
 
 
+# Working-memory bounds: enough to remember a repo's shape, small enough that the
+# prompt cannot grow without limit over a long run.
+_MAX_NOTES = 40
+_MAX_NOTE_CHARS = 6000
+
+
+def _record_note(notes: list[str], note: str) -> list[str]:
+    """Return ``notes`` with ``note`` appended, deduplicated and bounded.
+
+    Oldest notes are dropped first when either bound is exceeded — recent
+    findings are the ones still relevant to where the run has got to.
+
+    Args:
+        notes: The notes accumulated so far.
+        note: The new note to record.
+
+    Returns:
+        The updated note list.
+    """
+    note = note.strip()
+    if not note or note in notes:
+        return notes
+    updated = [*notes, note]
+    while len(updated) > _MAX_NOTES or sum(len(n) for n in updated) > _MAX_NOTE_CHARS:
+        if len(updated) == 1:
+            updated[0] = updated[0][:_MAX_NOTE_CHARS]
+            break
+        updated.pop(0)
+    return updated
+
+
 def _utc_today() -> str:
     """Return today's date (UTC) as an ISO 8601 ``YYYY-MM-DD`` string."""
     return datetime.now(timezone.utc).date().isoformat()
@@ -570,6 +606,7 @@ class RepairLoop:
 
         history: list[TurnOutcome] = []
         patch_history: list[str] = []
+        notes: list[str] = []
         bugs_fixed: list[dict[str, str]] = []
         cost = 0.0
         verdict: Verdict | None = None
@@ -590,6 +627,7 @@ class RepairLoop:
                 last_stderr=last_err,
                 patch_history=list(patch_history),
                 history=list(history),
+                notes=list(notes),
             )
             # A hard agent/API failure (after the agent's own retries) must not
             # crash the run — end it gracefully so a contract is still emitted.
@@ -600,6 +638,8 @@ class RepairLoop:
                 reason = f"agent call failed: {type(exc).__name__}: {exc}"
                 break
             cost += action.cost_usd
+            if action.notes:
+                notes = _record_note(notes, action.notes)
 
             if action.kind == "give_up":
                 verdict = "FAILED"
