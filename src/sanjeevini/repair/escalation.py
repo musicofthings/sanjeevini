@@ -210,23 +210,40 @@ def propose_escalation(
 
 @dataclass
 class AttemptRecord:
-    """What one attempt did, for the escalation trail in the provenance record.
+    """What one attempt did and why the run moved on from it.
+
+    The escalation fields describe the move *away* from this image rather than
+    the move towards it. Written the other way round, the reason a run left an
+    image would live on the record of the image it left for — which is the one
+    record a contract emitted mid-escalation does not yet have, so the
+    justification would never reach the provenance file.
 
     Attributes:
         base_image: The image this attempt ran on.
         verdict: Its terminal verdict.
         turns: Turns it consumed.
         reason: Its failure reason, if any.
-        rule: The escalation rule that chose this image (empty for the first).
-        rationale: Why that rule fired (empty for the first attempt).
+        escalated_to: The image tried next, if this attempt was escalated away from.
+        rule: The rule that justified that move.
+        rationale: Why that rule fired.
+        signal: The blocker line the rule matched — the evidence.
     """
 
     base_image: str
     verdict: str
     turns: int
     reason: str = ""
+    escalated_to: str = ""
     rule: str = ""
     rationale: str = ""
+    signal: str = ""
+
+    def record_escalation(self, step: EscalationStep) -> None:
+        """Note that the run left this image for ``step``'s image, and why."""
+        self.escalated_to = step.base_image
+        self.rule = step.rule
+        self.rationale = step.rationale
+        self.signal = step.signal
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serialisable dict for the provenance record."""
@@ -235,8 +252,10 @@ class AttemptRecord:
             "verdict": self.verdict,
             "turns": self.turns,
             "reason": self.reason,
+            "escalated_to": self.escalated_to,
             "rule": self.rule,
             "rationale": self.rationale,
+            "signal": self.signal,
         }
 
 
@@ -271,21 +290,17 @@ class EscalatingResurrection:
             the last failure. Every attempt is recorded in :attr:`attempts`.
         """
         image = self.base_image
-        step: EscalationStep | None = None
         tried: list[str] = []
 
         while True:
             outcome = self.run_attempt(image, list(self.attempts))
-            self.attempts.append(
-                AttemptRecord(
-                    base_image=image,
-                    verdict=outcome.verdict,
-                    turns=outcome.turns,
-                    reason=outcome.reason,
-                    rule=step.rule if step else "",
-                    rationale=step.rationale if step else "",
-                )
+            record = AttemptRecord(
+                base_image=image,
+                verdict=outcome.verdict,
+                turns=outcome.turns,
+                reason=outcome.reason,
             )
+            self.attempts.append(record)
             tried.append(image)
 
             if len(tried) > self.max_extra_attempts:
@@ -299,6 +314,7 @@ class EscalatingResurrection:
             )
             if step is None:
                 return outcome
+            record.record_escalation(step)
             self.announce(
                 f"escalating to {step.base_image}: {step.rationale} (saw: {step.signal[:120]})"
             )

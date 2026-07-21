@@ -64,11 +64,11 @@ provenance record.
 ## Test results
 
 ```
-360 passed, 6 deselected  ·  86% coverage (2786 statements)
+360 passed, 10 deselected  ·  86% coverage (2795 statements)
 ruff check + ruff format + mypy --strict: clean across src/ and tests/
 ```
 
-The 6 deselected are `-m integration` tests that need a live Docker daemon and
+The 10 deselected are `-m integration` tests that need a live Docker daemon and
 network; `pytest -m "not integration"` is the CI gate. Coverage by subsystem:
 
 | Subsystem | Coverage |
@@ -176,9 +176,25 @@ image is never retried; a run that died because the API was unreachable never
 escalates, since it learned nothing about the image; and the extra attempts are
 capped, so total work is bounded by `--turns × (1 + N)`.
 
-Every attempt is recorded in `PROVENANCE.json` — which images were ruled out,
-by which rule, on what evidence — so an escalated PASS is auditable rather than
-a lucky retry.
+Every attempt is recorded in `PROVENANCE.json`, so an escalated PASS is auditable
+rather than a lucky retry:
+
+```json
+"escalation": [{
+  "base_image": "python:3.11-slim", "verdict": "FAILED", "turns": 2,
+  "escalated_to": "python:2.7-slim", "rule": "python2_sources",
+  "rationale": "the sources are Python 2; no repair inside a Python 3 image can reach a PASS",
+  "signal": "SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?"
+}]
+```
+
+The record describes the move *away* from an image, not towards it. Written the
+other way round the justification would live on the record of the image it moved
+to — the one record a contract emitted mid-escalation does not yet have, so it
+would never reach the file.
+
+The whole path is exercised against real Docker by integration tests that drive
+real containers with a scripted agent, so it is verifiable without an API key.
 
 ## Development
 

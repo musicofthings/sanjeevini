@@ -358,7 +358,13 @@ def test_the_extra_attempt_budget_is_a_hard_ceiling() -> None:
     assert images == ["python:3.11-slim", "python:2.7-slim"]
 
 
-def test_the_trail_records_the_rule_that_chose_each_image() -> None:
+def test_the_trail_explains_why_the_run_left_each_image() -> None:
+    """The justification lives on the abandoned attempt, not the one it led to.
+
+    A contract emitted by the escalated attempt only carries the *prior* records,
+    so a rationale stored on the current attempt would never reach the file.
+    """
+
     def attempt(image: str, prior: list[AttemptRecord]) -> RepairOutcome:
         if image == "python:2.7-slim":
             return _outcome("PASS", turns=22)
@@ -368,18 +374,16 @@ def test_the_trail_records_the_rule_that_chose_each_image() -> None:
     runner.run()
 
     first, second = runner.attempts
-    assert (first.base_image, first.verdict, first.turns, first.rule) == (
-        "python:3.11-slim",
-        "TIMEOUT",
-        40,
-        "",
-    )
-    assert (second.base_image, second.verdict, second.rule) == (
+    assert (first.base_image, first.verdict, first.turns) == ("python:3.11-slim", "TIMEOUT", 40)
+    assert (first.escalated_to, first.rule) == ("python:2.7-slim", "python2_sources")
+    assert "Python 2" in first.rationale
+    assert first.signal == "No module named cPickle"
+    # The attempt that passed was never escalated away from.
+    assert (second.base_image, second.verdict, second.escalated_to) == (
         "python:2.7-slim",
         "PASS",
-        "python2_sources",
+        "",
     )
-    assert "Python 2" in second.rationale
 
 
 def test_each_attempt_receives_the_trail_so_far() -> None:
@@ -401,8 +405,10 @@ def test_attempt_record_to_dict_is_serialisable() -> None:
         "verdict",
         "turns",
         "reason",
+        "escalated_to",
         "rule",
         "rationale",
+        "signal",
     }
 
 
@@ -524,8 +530,10 @@ def test_provenance_carries_blockers_and_the_escalation_trail(tmp_path: Path) ->
             base_image="python:3.11-slim",
             verdict="TIMEOUT",
             turns=40,
+            escalated_to="python:2.7-slim",
             rule="python2_sources",
             rationale="the sources are Python 2",
+            signal="SyntaxError: Missing parentheses in call to 'print'",
         )
     ]
     outcome = _run(
@@ -546,8 +554,10 @@ def test_provenance_carries_blockers_and_the_escalation_trail(tmp_path: Path) ->
             "verdict": "TIMEOUT",
             "turns": 40,
             "reason": "",
+            "escalated_to": "python:2.7-slim",
             "rule": "python2_sources",
             "rationale": "the sources are Python 2",
+            "signal": "SyntaxError: Missing parentheses in call to 'print'",
         }
     ]
 

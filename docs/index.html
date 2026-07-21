@@ -235,9 +235,9 @@ export ANTHROPIC_API_KEY=sk-...
     </div>
 
     <h3>Test suite</h3>
-    <pre>360 passed, 6 deselected  <span class="c">·</span>  86% coverage (2786 statements)
+    <pre>360 passed, 10 deselected  <span class="c">·</span>  86% coverage (2795 statements)
 <span class="c">ruff check + ruff format + mypy --strict: clean across src/ and tests/</span></pre>
-    <p class="muted">The 6 deselected are <code>-m integration</code> tests needing a live Docker daemon and
+    <p class="muted">The 10 deselected are <code>-m integration</code> tests needing a live Docker daemon and
     network; <code>pytest -m "not integration"</code> is the CI gate.</p>
     <div class="tablewrap">
       <table>
@@ -331,10 +331,21 @@ export ANTHROPIC_API_KEY=sk-...
       <b>There is no blind fallback.</b> A run that failed for a reason no image can fix stays failed,
       because that is the honest verdict. An image is never retried; a run that died because the API was
       unreachable never escalates, since it learned nothing about the image; and the attempts are capped,
-      so total work is bounded by <code>--turns × (1 + N)</code>. Every attempt lands in
-      <code>PROVENANCE.json</code> — which images were ruled out, by which rule, on what evidence — so an
-      escalated PASS is auditable rather than a lucky retry.
+      so total work is bounded by <code>--turns × (1 + N)</code>.
     </div>
+    <p>Every attempt lands in <code>PROVENANCE.json</code>, so an escalated PASS is auditable rather
+    than a lucky retry — this is a real record from a real escalated run:</p>
+    <pre><span class="k">"escalation"</span>: [{
+  <span class="k">"base_image"</span>: <span class="k">"python:3.11-slim"</span>, <span class="k">"verdict"</span>: <span class="k">"FAILED"</span>, <span class="k">"turns"</span>: 2,
+  <span class="k">"escalated_to"</span>: <span class="k">"python:2.7-slim"</span>, <span class="k">"rule"</span>: <span class="k">"python2_sources"</span>,
+  <span class="k">"rationale"</span>: <span class="k">"the sources are Python 2; no repair inside a Python 3 image can reach a PASS"</span>,
+  <span class="k">"signal"</span>: <span class="k">"SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?"</span>
+}]</pre>
+    <p class="muted">The record describes the move <em>away</em> from an image, not towards it. Written
+    the other way round the justification would live on the record of the image it moved to — the one
+    record a contract emitted mid-escalation does not yet have, so it would never reach the file. The
+    whole path is exercised against real Docker by integration tests that drive real containers with a
+    scripted agent, so it is verifiable without an API key.</p>
   </section>
 
   <section>

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import json
 import re
 import shlex
@@ -1436,45 +1437,89 @@ class ResurrectCommand:
             knowledge = default_store()
             agent = self._build_agent(spec, knowledge)  # fail fast, before any container
 
-            def attempt(image: str, prior: list[AttemptRecord]) -> RepairOutcome:
-                # Only the first attempt may resume a checkpoint: a snapshot taken
-                # on a ruled-out image would drag that image's state into the retry.
-                resume = resume_image if not prior else None
-                spec.base_image = image
-                sandbox = DockerSandbox(
-                    resume or image,
-                    workdir=self.args.workdir,
-                    docker_host=self.args.docker_host,
-                    gpus=self.args.gpus,
-                    checkpoint_dir=checkpoint_dir if not prior else None,
-                )
-                sandbox.start()
-                try:
-                    if resume is None:
-                        # Fresh container: seed it with the checkout. On resume the
-                        # snapshot already carries the repo and in-container edits.
-                        sandbox.copy_in(repo_dir, self.args.workdir)
-                    return RepairLoop(
-                        spec,
-                        sandbox,
-                        agent,
-                        max_turns=self.args.turns,
-                        knowledge=knowledge,
-                        prior_attempts=prior,
-                    ).run()
-                finally:
-                    if not self.args.keep:
-                        sandbox.stop(force=True)
-
             runner = EscalatingResurrection(
                 base_image=spec.base_image,
-                run_attempt=attempt,
+                run_attempt=functools.partial(
+                    self.attempt,
+                    spec=spec,
+                    repo_dir=repo_dir,
+                    agent=agent,
+                    knowledge=knowledge,
+                    resume_image=resume_image,
+                    checkpoint_dir=checkpoint_dir,
+                ),
                 max_extra_attempts=self.args.escalate,
                 announce=lambda msg: print(msg, file=sys.stderr),
             )
             outcome = runner.run()
 
         self._report(outcome, runner.attempts)
+
+    def attempt(
+        self,
+        image: str,
+        prior: list[AttemptRecord],
+        *,
+        spec: ResurrectionSpec,
+        repo_dir: Path,
+        agent: RepairAgent,
+        knowledge: KnowledgeStore | None = None,
+        resume_image: str | None = None,
+        checkpoint_dir: Path | None = None,
+        contracts_root: Path | str = "contracts",
+    ) -> RepairOutcome:
+        """Run one resurrection attempt in its own container on ``image``.
+
+        This is what :class:`~sanjeevini.repair.escalation.EscalatingResurrection`
+        calls once per base image. It is a public method rather than a closure so
+        the container lifecycle — fresh sandbox, repo re-seeding, checkpoint
+        suppression on a retry — can be tested against real Docker without
+        needing a live agent.
+
+        Args:
+            image: The base image for this attempt.
+            prior: Attempts already made; non-empty means this is an escalation.
+            spec: The resurrection spec, whose ``base_image`` is updated to match.
+            repo_dir: Host checkout to seed a fresh container with.
+            agent: The agent choosing actions.
+            knowledge: Cross-run lesson store, or ``None`` to disable learning.
+            resume_image: Snapshot to resume from, honoured on the first attempt only.
+            checkpoint_dir: Where turn checkpoints are written, first attempt only.
+            contracts_root: Directory the contract is emitted under.
+
+        Returns:
+            That attempt's :class:`RepairOutcome`.
+        """
+        # Only the first attempt may resume a checkpoint: a snapshot taken on a
+        # ruled-out image would drag that image's state into the retry, which is
+        # precisely what escalating was meant to escape.
+        resume = resume_image if not prior else None
+        spec.base_image = image
+        sandbox = DockerSandbox(
+            resume or image,
+            workdir=self.args.workdir,
+            docker_host=self.args.docker_host,
+            gpus=self.args.gpus,
+            checkpoint_dir=checkpoint_dir if not prior else None,
+        )
+        sandbox.start()
+        try:
+            if resume is None:
+                # Fresh container: seed it with the checkout. On resume the
+                # snapshot already carries the repo and in-container edits.
+                sandbox.copy_in(repo_dir, self.args.workdir)
+            return RepairLoop(
+                spec,
+                sandbox,
+                agent,
+                max_turns=self.args.turns,
+                contracts_root=contracts_root,
+                knowledge=knowledge,
+                prior_attempts=prior,
+            ).run()
+        finally:
+            if not self.args.keep:
+                sandbox.stop(force=True)
 
     def _goal_override(self) -> GoalOverride:
         """Read and validate ``--goal-file``, or return an empty override.
@@ -1573,7 +1618,7 @@ class ResurrectCommand:
         # Only worth showing when the run actually escalated; a single attempt
         # is already fully described by the lines above.
         for i, attempt in enumerate(attempts if len(attempts) > 1 else (), start=1):
-            detail = f" ({attempt.rule})" if attempt.rule else ""
+            detail = f", escalated ({attempt.rule})" if attempt.escalated_to else ""
             print(
                 f"attempt {i}    : {attempt.base_image} -> {attempt.verdict} "
                 f"in {attempt.turns} turns{detail}"
