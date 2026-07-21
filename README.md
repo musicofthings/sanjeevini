@@ -64,7 +64,7 @@ provenance record.
 ## Test results
 
 ```
-319 passed, 6 deselected  ·  86% coverage (2678 statements)
+360 passed, 6 deselected  ·  86% coverage (2786 statements)
 ruff check + ruff format + mypy --strict: clean across src/ and tests/
 ```
 
@@ -73,6 +73,7 @@ network; `pytest -m "not integration"` is the CI gate. Coverage by subsystem:
 
 | Subsystem | Coverage |
 |---|---|
+| `repair/escalation.py` (bounded self-escalation) | 100% |
 | `contracts/output_type.py` (sanity-check quality gate) | 99% |
 | `repair/knowledge.py` (cross-run learning) | 99% |
 | `scouts/python_scout.py` | 91% |
@@ -151,6 +152,33 @@ records the result. This **never overturns a verdict** — a real exit code
 outranks a filesystem heuristic, since a tool may stream to stdout or write
 outside the working directory — but an unsupported claim is flagged loudly in
 `PROVENANCE.json`, `REPRODUCE.md`, and on the CLI.
+
+## Bounded self-escalation
+
+Some rot is not repairable from inside the container the run was given. Python 2
+sources on a `python:3` image cannot reach a PASS no matter how many turns the
+agent spends patching — the interpreter is wrong. Until now the run just died
+there: the one case where a human watching would have said "try 2.7".
+
+Jeeva now says it to itself. On a failure it reads its own error signatures and,
+if a rule matches, retries on a better base image (`--escalate N`, default 1;
+`0` disables). Three rules, each firing only on text the run actually printed:
+
+| Evidence | Retarget |
+|---|---|
+| Python 2 markers (`Missing parentheses in call to 'print'`, py2-only stdlib imports, `except E, e:`) | `python:3.x-slim` → `python:2.7-slim` |
+| No C toolchain (`gcc: command not found`, `fatal error: Python.h`) | drop `-slim` for the full image, which ships gcc |
+| musl wheel failures on Alpine | leave Alpine for the glibc image |
+
+The discipline is that there is **no blind fallback**. A run that failed for a
+reason no image can fix stays failed, because that is the honest verdict. An
+image is never retried; a run that died because the API was unreachable never
+escalates, since it learned nothing about the image; and the extra attempts are
+capped, so total work is bounded by `--turns × (1 + N)`.
+
+Every attempt is recorded in `PROVENANCE.json` — which images were ruled out,
+by which rule, on what evidence — so an escalated PASS is auditable rather than
+a lucky retry.
 
 ## Development
 

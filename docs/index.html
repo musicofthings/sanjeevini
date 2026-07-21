@@ -99,7 +99,7 @@
       <span class="badge">Nextflow · Snakemake · WDL</span>
       <span class="badge">Typed genomic I/O</span>
       <span class="badge">MCP server</span>
-      <span class="badge">319 tests · 86% coverage</span>
+      <span class="badge">360 tests · 86% coverage</span>
     </div>
   </div>
 </header>
@@ -235,7 +235,7 @@ export ANTHROPIC_API_KEY=sk-...
     </div>
 
     <h3>Test suite</h3>
-    <pre>319 passed, 6 deselected  <span class="c">·</span>  86% coverage (2678 statements)
+    <pre>360 passed, 6 deselected  <span class="c">·</span>  86% coverage (2786 statements)
 <span class="c">ruff check + ruff format + mypy --strict: clean across src/ and tests/</span></pre>
     <p class="muted">The 6 deselected are <code>-m integration</code> tests needing a live Docker daemon and
     network; <code>pytest -m "not integration"</code> is the CI gate.</p>
@@ -243,6 +243,7 @@ export ANTHROPIC_API_KEY=sk-...
       <table>
         <thead><tr><th>Subsystem</th><th>Coverage</th></tr></thead>
         <tbody>
+          <tr><td><code>repair/escalation.py</code> — bounded self-escalation</td><td class="num">100%</td></tr>
           <tr><td><code>contracts/output_type.py</code> — sanity-check quality gate</td><td class="num">99%</td></tr>
           <tr><td><code>repair/knowledge.py</code> — cross-run learning</td><td class="num">99%</td></tr>
           <tr><td><code>scouts/python_scout.py</code></td><td class="num">91%</td></tr>
@@ -306,6 +307,33 @@ export ANTHROPIC_API_KEY=sk-...
       Lessons are injected as <b>hints, not instructions</b>. The prompt tells the agent to verify
       before trusting one, and PASS is still decided only by a real exit code — so a wrong lesson
       cannot poison a later run.
+    </div>
+  </section>
+
+  <section>
+    <h2>When the container itself is the blocker</h2>
+    <p>Some rot cannot be repaired from inside the container the run was given. Python 2 sources on a
+    <code>python:3</code> image will never reach a PASS however many turns the agent spends patching —
+    the interpreter is wrong. That was the one case where a human watching would have said
+    <em>“try 2.7”</em>. Jeeva now says it to itself: on failure it reads its own error signatures and
+    retries on a better image (<code>--escalate N</code>, default 1).</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Evidence the run actually printed</th><th>Retarget</th></tr></thead>
+        <tbody>
+          <tr><td>Python 2 markers — <code>Missing parentheses in call to 'print'</code>, py2-only stdlib imports, <code>except E, e:</code></td><td><code>python:3.x-slim</code> → <code>python:2.7-slim</code></td></tr>
+          <tr><td>No C toolchain — <code>gcc: command not found</code>, <code>fatal error: Python.h</code></td><td>drop <code>-slim</code> for the full image, which ships gcc</td></tr>
+          <tr><td>musl wheel failures on Alpine</td><td>leave Alpine for the glibc image</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <b>There is no blind fallback.</b> A run that failed for a reason no image can fix stays failed,
+      because that is the honest verdict. An image is never retried; a run that died because the API was
+      unreachable never escalates, since it learned nothing about the image; and the attempts are capped,
+      so total work is bounded by <code>--turns × (1 + N)</code>. Every attempt lands in
+      <code>PROVENANCE.json</code> — which images were ruled out, by which rule, on what evidence — so an
+      escalated PASS is auditable rather than a lucky retry.
     </div>
   </section>
 
