@@ -46,6 +46,15 @@ def _add_resurrect(sub: SubParsers) -> None:
     )
     p.add_argument("--turns", type=int, default=60, help="Maximum repair-loop turns (default: 60).")
     p.add_argument(
+        "--escalate",
+        type=int,
+        default=1,
+        metavar="N",
+        help="On failure, retry on up to N alternate base images when the run's own "
+        "errors justify one — e.g. Python 2 sources on a Python 3 image "
+        "(default: 1; 0 disables). Total work is bounded by --turns x (1 + N).",
+    )
+    p.add_argument(
         "--budget-usd",
         type=float,
         help="Hard cost cap in USD (requires claude-agent-sdk ≥ 0.3).",

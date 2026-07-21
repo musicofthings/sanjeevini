@@ -39,7 +39,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +50,7 @@ import yaml
 from sanjeevini import __version__ as JEEVA_VERSION
 from sanjeevini.contracts.output_type import extensions_for_check
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
+from sanjeevini.repair.escalation import AttemptRecord, EscalatingResurrection
 from sanjeevini.repair.knowledge import (
     KnowledgeStore,
     default_store,
@@ -502,6 +503,9 @@ class RepairOutcome:
         contract_dir: Directory the contract/provenance was written to.
         evidence: Whether the sanity check's structural claim is backed by files
             the run actually produced (a qualifier on PASS, never a verdict).
+        blockers: One compact signature per failing turn, oldest first. Lossy by
+            design — enough to diagnose *what kind* of wall the run hit, which is
+            what self-escalation needs to pick a better base image.
     """
 
     verdict: Verdict
@@ -515,6 +519,7 @@ class RepairOutcome:
     contract_dir: Path | None = None
     evidence: SanityEvidence = field(default_factory=SanityEvidence)
     notes: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +563,10 @@ _SEGMENT_RE = re.compile(r"&&|\|\||;|\|")
 # Exit code synthesised for a suppressed repeat.
 _RC_NOOP_REPEAT = 126
 
+# Return codes the loop itself invents. Their text is our own prose, not the
+# tool's, so it must never be mistaken for evidence about the environment.
+_SYNTHETIC_RCS = frozenset({_RC_TIMEOUT, _RC_SANDBOX_ERROR, _RC_NOOP_REPEAT})
+
 
 def is_read_only(cmd: list[str]) -> bool:
     """Return whether ``cmd`` only inspects state and cannot change anything.
@@ -596,6 +605,22 @@ def is_read_only(cmd: list[str]) -> bool:
 # prompt cannot grow without limit over a long run.
 _MAX_NOTES = 40
 _MAX_NOTE_CHARS = 6000
+# Enough distinct walls to diagnose a failure; more is repetition of the same one.
+_MAX_BLOCKERS = 12
+
+
+def _record_blocker(blockers: list[str], result: ExecResult) -> None:
+    """Append this failed turn's error signature, deduplicated and bounded.
+
+    Falls back to stdout because agents routinely pipe ``2>&1``, which leaves
+    stderr empty on exactly the turns whose failure matters most.
+    """
+    signature = error_signature(result.stderr) or error_signature(result.stdout)
+    if result.returncode in _SYNTHETIC_RCS or not signature or signature in blockers:
+        return
+    blockers.append(signature)
+    if len(blockers) > _MAX_BLOCKERS:
+        del blockers[0]
 
 
 def _record_note(notes: list[str], note: str) -> list[str]:
@@ -641,6 +666,7 @@ class RepairLoop:
         contracts_root: Path | str = "contracts",
         today: str | None = None,
         knowledge: KnowledgeStore | None = None,
+        prior_attempts: Sequence[AttemptRecord] = (),
     ) -> None:
         """Configure a repair loop.
 
@@ -653,6 +679,8 @@ class RepairLoop:
             today: Override for the resurrection date (defaults to today, UTC).
             knowledge: Cross-run lesson store to record this run's fixes into;
                 ``None`` disables learning (the default for tests).
+            prior_attempts: Earlier attempts on other base images, recorded in the
+                provenance so a contract shows which images were ruled out first.
         """
         self.spec = spec
         self.sandbox = sandbox
@@ -661,6 +689,7 @@ class RepairLoop:
         self.contracts_root = Path(contracts_root)
         self.today = today or _utc_today()
         self.knowledge = knowledge
+        self.prior_attempts = list(prior_attempts)
 
     def run(self) -> RepairOutcome:
         """Run the loop to a terminal verdict and emit the contract.
@@ -680,6 +709,7 @@ class RepairLoop:
         notes: list[str] = []
         inspected: dict[tuple[str, ...], int] = {}
         bugs_fixed: list[dict[str, str]] = []
+        blockers: list[str] = []
         cost = 0.0
         verdict: Verdict | None = None
         reason = ""
@@ -739,6 +769,8 @@ class RepairLoop:
                 )
             )
             last_rc, last_out, last_err = result.returncode, result.stdout, result.stderr
+            if not result.ok:
+                _record_blocker(blockers, result)
 
             # Record the successful commands, in order — this is the reproduction
             # recipe emitted as a smoke test. Inspection commands are dropped:
@@ -804,6 +836,7 @@ class RepairLoop:
             reproduction=reproduction,
             final_image=final_image,
             notes=notes,
+            blockers=blockers,
         )
         if verdict == "PASS":
             outcome.evidence = self._verify_sanity_claim()
@@ -1112,6 +1145,9 @@ class RepairLoop:
             "sanity_check_evidence": outcome.evidence.to_dict(),
             # What the agent worked out about the repo — the run's audit trail.
             "agent_notes": outcome.notes,
+            # Walls this attempt hit, and the images ruled out before it.
+            "blockers": outcome.blockers,
+            "escalation": [a.to_dict() for a in self.prior_attempts],
         }
 
 
@@ -1399,28 +1435,46 @@ class ResurrectCommand:
             # the loop writes this run's fixes back into it.
             knowledge = default_store()
             agent = self._build_agent(spec, knowledge)  # fail fast, before any container
-            sandbox = DockerSandbox(
-                resume_image or spec.base_image,
-                workdir=self.args.workdir,
-                docker_host=self.args.docker_host,
-                gpus=self.args.gpus,
-                checkpoint_dir=checkpoint_dir,
-            )
-            sandbox.start()
-            try:
-                if resume_image is None:
-                    # Fresh run: seed the container with the checkout. On resume the
-                    # snapshot already carries the repo and any in-container edits.
-                    sandbox.copy_in(repo_dir, self.args.workdir)
-                loop = RepairLoop(
-                    spec, sandbox, agent, max_turns=self.args.turns, knowledge=knowledge
-                )
-                outcome = loop.run()
-            finally:
-                if not self.args.keep:
-                    sandbox.stop(force=True)
 
-        self._report(outcome)
+            def attempt(image: str, prior: list[AttemptRecord]) -> RepairOutcome:
+                # Only the first attempt may resume a checkpoint: a snapshot taken
+                # on a ruled-out image would drag that image's state into the retry.
+                resume = resume_image if not prior else None
+                spec.base_image = image
+                sandbox = DockerSandbox(
+                    resume or image,
+                    workdir=self.args.workdir,
+                    docker_host=self.args.docker_host,
+                    gpus=self.args.gpus,
+                    checkpoint_dir=checkpoint_dir if not prior else None,
+                )
+                sandbox.start()
+                try:
+                    if resume is None:
+                        # Fresh container: seed it with the checkout. On resume the
+                        # snapshot already carries the repo and in-container edits.
+                        sandbox.copy_in(repo_dir, self.args.workdir)
+                    return RepairLoop(
+                        spec,
+                        sandbox,
+                        agent,
+                        max_turns=self.args.turns,
+                        knowledge=knowledge,
+                        prior_attempts=prior,
+                    ).run()
+                finally:
+                    if not self.args.keep:
+                        sandbox.stop(force=True)
+
+            runner = EscalatingResurrection(
+                base_image=spec.base_image,
+                run_attempt=attempt,
+                max_extra_attempts=self.args.escalate,
+                announce=lambda msg: print(msg, file=sys.stderr),
+            )
+            outcome = runner.run()
+
+        self._report(outcome, runner.attempts)
 
     def _goal_override(self) -> GoalOverride:
         """Read and validate ``--goal-file``, or return an empty override.
@@ -1509,13 +1563,21 @@ class ResurrectCommand:
 
         return LLMRepairAgent(spec, knowledge=knowledge)
 
-    def _report(self, outcome: RepairOutcome) -> None:
+    def _report(self, outcome: RepairOutcome, attempts: Sequence[AttemptRecord] = ()) -> None:
         """Print the verdict, contract directory, and smoke-test command."""
         print(f"verdict      : {outcome.verdict}")
         print(f"turns        : {outcome.turns}")
         print(f"cost (usd)   : {outcome.cost_usd}")
         if outcome.reason:
             print(f"reason       : {outcome.reason}")
+        # Only worth showing when the run actually escalated; a single attempt
+        # is already fully described by the lines above.
+        for i, attempt in enumerate(attempts if len(attempts) > 1 else (), start=1):
+            detail = f" ({attempt.rule})" if attempt.rule else ""
+            print(
+                f"attempt {i}    : {attempt.base_image} -> {attempt.verdict} "
+                f"in {attempt.turns} turns{detail}"
+            )
         if outcome.evidence.contradicts_claim:
             exts = ", ".join(outcome.evidence.claimed_extensions)
             print(
