@@ -59,14 +59,16 @@ script exits non-zero if any clause fails.
 
 ### pycoQC — a still-runs case
 
-`a-slide/pycoQC`, an archived ONT read-QC tool: **PASS** in 9 turns,
-`sanjeevini/pycoqc:resurrected` (783 MB), 1.77 MB HTML report + valid JSON.
-Honest caveat: `bugs_fixed` was empty — pycoQC still installs cleanly, so this
-demonstrates verification rather than repair.
+`a-slide/pycoQC`, an archived ONT read-QC tool: **PASS** in 7 turns,
+`sanjeevini/pycoqc:resurrected` (685 MB), 27,954-byte JSON report parsing to a
+non-empty 3-key dict. Honest caveat: `bugs_fixed` lists three era-appropriate
+dependency pins (`numpy==1.19.5`, `scipy==1.5.4`, `pandas==1.1.5`, `h5py==3.1.0`
+for `python:3.6-slim`) but none carry a source diff — pycoQC still installs
+cleanly, so this demonstrates verification rather than repair.
 
-pycoQC's `cost_usd` still reads `0.0`: token pricing is not yet wired into the
-direct-API backend. PyPore's PASS above used the subscription-backed planner
-instead, which reports a real dollar figure per turn — see below.
+Both PASSes above ran on the subscription-backed planner (below), so both carry
+a real dollar figure instead of the direct-API backend's hardcoded `0.0`: PyPore
+$1.45, pycoQC $0.41.
 
 ## Subscription-backed planner
 
@@ -83,9 +85,10 @@ Opt in with `JEEVA_BACKEND=subscription` (the default stays the direct-API
 explicitly blanked for the CLI subprocess, since a present key would otherwise take
 billing precedence over the subscription login.
 
-The PyPore PASS documented above was produced entirely on this backend — same system
+Both PASSes documented above were produced entirely on this backend — same system
 prompt, same JSON-action parsing, same falsifiable sanity check, just a different
-biller: 20 turns, $1.45.
+biller: PyPore in 20 turns for $1.45, pycoQC in 7 turns for $0.41 (down from its
+original 9 turns on the direct-API backend).
 
 ## Test results
 

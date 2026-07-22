@@ -227,14 +227,16 @@ export ANTHROPIC_API_KEY=sk-...
     </div>
 
     <h3>pycoQC — a still-runs case</h3>
-    <p><code>a-slide/pycoQC</code>, an archived ONT read-QC tool: PASS in 9 turns,
-    <code>sanjeevini/pycoqc:resurrected</code> (783 MB), 1.77 MB HTML report + valid JSON.</p>
+    <p><code>a-slide/pycoQC</code>, an archived ONT read-QC tool: PASS in 7 turns,
+    <code>sanjeevini/pycoqc:resurrected</code> (685 MB), 27,954-byte JSON report parsing to a
+    non-empty 3-key dict.</p>
     <div class="note">
-      <b>Honest caveats.</b> pycoQC's <code>bugs_fixed</code> was empty — it still installs cleanly,
-      so that run demonstrates verification rather than repair. Its <code>cost_usd</code> still reads
-      <code>0.0</code> because token pricing is not yet wired into the direct-API backend. PyPore's
-      PASS above used the subscription-backed planner instead, which reports a real dollar figure —
-      see below.
+      <b>Honest caveats.</b> pycoQC's <code>bugs_fixed</code> lists three era-appropriate dependency
+      pins (<code>numpy==1.19.5</code>, <code>scipy==1.5.4</code>, <code>pandas==1.1.5</code>,
+      <code>h5py==3.1.0</code> for <code>python:3.6-slim</code>) but none carry a source diff — it
+      still installs cleanly, so that run demonstrates verification rather than repair. Both PASSes
+      above ran on the subscription-backed planner (below), so both carry a real dollar figure
+      instead of the direct-API backend's hardcoded <code>0.0</code>.
     </div>
 
     <h3>Subscription-backed planner</h3>
@@ -250,8 +252,10 @@ export ANTHROPIC_API_KEY=sk-...
     <div class="note">
       An <code>ANTHROPIC_API_KEY</code> inherited from the parent shell is explicitly blanked for the
       CLI subprocess — a present key would otherwise take billing precedence over the subscription
-      login. The PyPore PASS documented above ran entirely on this backend: same system prompt, same
-      JSON-action parsing, same falsifiable sanity check, just a different biller — 20 turns, $1.45.
+      login. Both PASSes documented above ran entirely on this backend: same system prompt, same
+      JSON-action parsing, same falsifiable sanity check, just a different biller — PyPore in 20 turns
+      for $1.45, pycoQC in 7 turns for $0.41 (down from its original 9 turns on the direct-API
+      backend).
     </div>
 
     <h3>Test suite</h3>
