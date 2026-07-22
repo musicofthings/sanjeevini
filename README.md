@@ -31,20 +31,26 @@ in the repo at all.
 
 | | |
 |---|---|
-| Verdict | **PASS** in 22 turns |
-| Image | `sanjeevini/pypore:resurrected` (474 MB) |
-| Proof | 12/12 injected blockade events detected, every event segmented, 22,918-byte JSON written |
+| Verdict | **PASS** in 20 turns |
+| Image | `sanjeevini/pypore:resurrected` (590 MB) |
+| Proof | 12/12 injected blockade events detected, every event segmented, 10,052-byte JSON written |
 | Reproduced | `docker run --rm sanjeevini/pypore:resurrected bash -lc 'cd /workspace/repo && python2 prove.py'` → exit 0 |
+| Cost | $1.45 — subscription-billed, see [Subscription-backed planner](#subscription-backed-planner) |
 
-Jeeva found and fixed four pieces of real rot on its own, with no human input:
+Jeeva found and fixed real rot on its own, with no human input:
 
-- **`missing_toolchain`** — Debian buster's apt mirrors return 404; repointed
-  `sources.list` at `archive.debian.org`. Nothing in a 2015 repo could have known
-  this, and it will recur on every EOL base image.
-- **`missing_toolchain`** — no compiler in `python:2.7-slim`; installed gcc.
-- **`build_failure`** — gcc present but `libc6-dev` headers (`limits.h`) missing.
-- **`build_failure`** — pinned `cython==0.29.37` / `scipy==1.2.3` so the Python 2
-  `.pyx` sources compile (Cython 3 rejects `izip` and implicit relative imports).
+- **`dead_mirror`** — Debian buster's apt mirrors return 404 (EOL); repointed
+  `sources.list` at `archive.debian.org` with `Valid-Until` checking disabled.
+  Nothing in a 2015 repo could have known this, and it will recur on every EOL
+  base image.
+- **`missing_toolchain`** — no C compiler in `python:2.7-slim`; installed
+  `build-essential`/gcc to build the Cython extensions.
+- **`dep_conflict`** — pinned `numpy==1.16.6`, `scipy==1.2.3`, `cython==0.29.37`
+  to versions that actually build against Python 2.7.
+- **`build_failure`** — PyPore's `cparsers.pyx`/`calignment.pyx` shipped no `.c`
+  files; built them with `language_level=2` against the pins above, then ran
+  `lambda_event_parser` + `SpeedyStatSplit` end to end on a synthetic 12-event
+  trace.
 
 Because the repo ships no `.abf` data, the sanity check proves the scientific
 core on a synthetic current trace: 12 injected blockade events, requiring ≥10
@@ -58,13 +64,33 @@ script exits non-zero if any clause fails.
 Honest caveat: `bugs_fixed` was empty — pycoQC still installs cleanly, so this
 demonstrates verification rather than repair.
 
-`cost_usd` reads `0.0` on both runs: token pricing is not yet wired into the
-provenance record.
+pycoQC's `cost_usd` still reads `0.0`: token pricing is not yet wired into the
+direct-API backend. PyPore's PASS above used the subscription-backed planner
+instead, which reports a real dollar figure per turn — see below.
+
+## Subscription-backed planner
+
+The Anthropic API console balance and a claude.ai subscription (Pro/Max/Team) are
+separate billing pools — usage on one does not fund the other, even under the same
+login. `LLMRepairAgent` has a second completion backend that sidesteps the API
+balance entirely: `SubscriptionClient` (`src/sanjeevini/repair/agent.py`) drives the
+local `claude` CLI through `claude-agent-sdk`, so the planner authenticates with
+whatever Claude subscription is already logged in on the machine instead of a
+separate `ANTHROPIC_API_KEY`.
+
+Opt in with `JEEVA_BACKEND=subscription` (the default stays the direct-API
+`AnthropicClient`). An `ANTHROPIC_API_KEY` inherited from the parent shell is
+explicitly blanked for the CLI subprocess, since a present key would otherwise take
+billing precedence over the subscription login.
+
+The PyPore PASS documented above was produced entirely on this backend — same system
+prompt, same JSON-action parsing, same falsifiable sanity check, just a different
+biller: 20 turns, $1.45.
 
 ## Test results
 
 ```
-360 passed, 10 deselected  ·  86% coverage (2795 statements)
+364 passed, 10 deselected  ·  85% coverage (2820 statements)
 ruff check + ruff format + mypy --strict: clean across src/ and tests/
 ```
 
@@ -77,9 +103,9 @@ network; `pytest -m "not integration"` is the CI gate. Coverage by subsystem:
 | `contracts/output_type.py` (sanity-check quality gate) | 99% |
 | `repair/knowledge.py` (cross-run learning) | 99% |
 | `scouts/python_scout.py` | 91% |
-| `repair/agent.py` | 88% |
-| `repair/loop.py` | 87% |
-| **Total** | **86%** |
+| `repair/agent.py` | 81% |
+| `repair/loop.py` | 86% |
+| **Total** | **85%** |
 
 Uncovered lines are overwhelmingly Docker-daemon and optional-dependency paths
 marked `# pragma: no cover`, plus CLI wiring exercised by the integration tests.

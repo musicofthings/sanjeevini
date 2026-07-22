@@ -99,7 +99,7 @@
       <span class="badge">Nextflow · Snakemake · WDL</span>
       <span class="badge">Typed genomic I/O</span>
       <span class="badge">MCP server</span>
-      <span class="badge">360 tests · 86% coverage</span>
+      <span class="badge">364 tests · 85% coverage</span>
     </div>
   </div>
 </header>
@@ -199,25 +199,26 @@ export ANTHROPIC_API_KEY=sk-...
     files were never committed, a <code>distutils</code> <code>setup.py</code>, and no test data in
     the repo at all.</p>
     <div class="stats">
-      <div class="stat"><div class="n">PASS</div><div class="l">verdict, in 22 turns</div></div>
+      <div class="stat"><div class="n">PASS</div><div class="l">verdict, in 20 turns</div></div>
       <div class="stat"><div class="n">12/12</div><div class="l">blockade events detected &amp; segmented</div></div>
-      <div class="stat"><div class="n">474 MB</div><div class="l"><code>sanjeevini/pypore:resurrected</code></div></div>
+      <div class="stat"><div class="n">590 MB</div><div class="l"><code>sanjeevini/pypore:resurrected</code></div></div>
+      <div class="stat"><div class="n">$1.45</div><div class="l">subscription-billed, see below</div></div>
     </div>
-    <p>Jeeva found and fixed four pieces of real rot with no human input:</p>
+    <p>Jeeva found and fixed real rot with no human input:</p>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Bug class</th><th>What it found</th></tr></thead>
         <tbody>
-          <tr><td><code>missing_toolchain</code></td><td>Debian buster apt mirrors return 404 — repointed <code>sources.list</code> at <code>archive.debian.org</code></td></tr>
-          <tr><td><code>missing_toolchain</code></td><td>no compiler in <code>python:2.7-slim</code> — installed gcc</td></tr>
-          <tr><td><code>build_failure</code></td><td>gcc present but <code>libc6-dev</code> headers (<code>limits.h</code>) missing</td></tr>
-          <tr><td><code>build_failure</code></td><td>pinned <code>cython==0.29.37</code> so the Python 2 <code>.pyx</code> sources compile</td></tr>
+          <tr><td><code>dead_mirror</code></td><td>Debian buster apt mirrors return 404 (EOL) — repointed <code>sources.list</code> at <code>archive.debian.org</code>, <code>Valid-Until</code> checking disabled</td></tr>
+          <tr><td><code>missing_toolchain</code></td><td>no C compiler in <code>python:2.7-slim</code> — installed <code>build-essential</code>/gcc</td></tr>
+          <tr><td><code>dep_conflict</code></td><td>pinned <code>numpy==1.16.6</code>, <code>scipy==1.2.3</code>, <code>cython==0.29.37</code> to versions that build against Python 2.7</td></tr>
+          <tr><td><code>build_failure</code></td><td>built <code>cparsers.pyx</code>/<code>calignment.pyx</code> (no shipped <code>.c</code> files) with <code>language_level=2</code>, then ran the parsers end to end on a synthetic 12-event trace</td></tr>
         </tbody>
       </table>
     </div>
     <p class="muted">Reproduced independently in a fresh container:
     <code>docker run --rm sanjeevini/pypore:resurrected bash -lc 'cd /workspace/repo &amp;&amp; python2 prove.py'</code>
-    → 12 events, 22,918-byte JSON, exit 0.</p>
+    → 12 events, 10,052-byte JSON, exit 0.</p>
     <div class="note">
       Because the repo ships no <code>.abf</code> data, the check proves the scientific core on a
       <b>synthetic current trace</b>: 12 injected blockade events, requiring ≥10 recovered, ≥1 state
@@ -230,12 +231,31 @@ export ANTHROPIC_API_KEY=sk-...
     <code>sanjeevini/pycoqc:resurrected</code> (783 MB), 1.77 MB HTML report + valid JSON.</p>
     <div class="note">
       <b>Honest caveats.</b> pycoQC's <code>bugs_fixed</code> was empty — it still installs cleanly,
-      so that run demonstrates verification rather than repair. And <code>cost_usd</code> reads
-      <code>0.0</code> on both runs because token pricing is not yet wired into the provenance record.
+      so that run demonstrates verification rather than repair. Its <code>cost_usd</code> still reads
+      <code>0.0</code> because token pricing is not yet wired into the direct-API backend. PyPore's
+      PASS above used the subscription-backed planner instead, which reports a real dollar figure —
+      see below.
+    </div>
+
+    <h3>Subscription-backed planner</h3>
+    <p>The Anthropic API console balance and a claude.ai subscription (Pro/Max/Team) are
+    <b>separate billing pools</b> — usage on one does not fund the other, even under the same login.
+    <code>LLMRepairAgent</code> has a second completion backend that sidesteps the API balance
+    entirely: <code>SubscriptionClient</code> drives the local <code>claude</code> CLI through
+    <code>claude-agent-sdk</code>, so the planner authenticates with whatever Claude subscription is
+    already logged in on the machine instead of a separate <code>ANTHROPIC_API_KEY</code>.</p>
+    <pre><span class="c"># default stays the direct-API AnthropicClient</span>
+<span class="k">export</span> JEEVA_BACKEND=subscription
+<span class="k">jeeva resurrect</span> https://github.com/jmschrei/PyPore --goal-file goals/pypore.yaml</pre>
+    <div class="note">
+      An <code>ANTHROPIC_API_KEY</code> inherited from the parent shell is explicitly blanked for the
+      CLI subprocess — a present key would otherwise take billing precedence over the subscription
+      login. The PyPore PASS documented above ran entirely on this backend: same system prompt, same
+      JSON-action parsing, same falsifiable sanity check, just a different biller — 20 turns, $1.45.
     </div>
 
     <h3>Test suite</h3>
-    <pre>360 passed, 10 deselected  <span class="c">·</span>  86% coverage (2795 statements)
+    <pre>364 passed, 10 deselected  <span class="c">·</span>  85% coverage (2820 statements)
 <span class="c">ruff check + ruff format + mypy --strict: clean across src/ and tests/</span></pre>
     <p class="muted">The 10 deselected are <code>-m integration</code> tests needing a live Docker daemon and
     network; <code>pytest -m "not integration"</code> is the CI gate.</p>
@@ -247,9 +267,9 @@ export ANTHROPIC_API_KEY=sk-...
           <tr><td><code>contracts/output_type.py</code> — sanity-check quality gate</td><td class="num">99%</td></tr>
           <tr><td><code>repair/knowledge.py</code> — cross-run learning</td><td class="num">99%</td></tr>
           <tr><td><code>scouts/python_scout.py</code></td><td class="num">91%</td></tr>
-          <tr><td><code>repair/agent.py</code></td><td class="num">88%</td></tr>
-          <tr><td><code>repair/loop.py</code></td><td class="num">87%</td></tr>
-          <tr><td><b>Total</b></td><td class="num"><b>86%</b></td></tr>
+          <tr><td><code>repair/agent.py</code></td><td class="num">81%</td></tr>
+          <tr><td><code>repair/loop.py</code></td><td class="num">86%</td></tr>
+          <tr><td><b>Total</b></td><td class="num"><b>85%</b></td></tr>
         </tbody>
       </table>
     </div>

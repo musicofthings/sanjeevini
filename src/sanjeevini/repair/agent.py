@@ -16,6 +16,10 @@ and reply parsing — unit-testable behind an injected ``complete`` callable.
 The default backend uses the Anthropic Messages API (``anthropic`` package, the
 ``[agent]`` extra). Cost tracking is best-effort: pass per-million-token prices
 to :class:`AnthropicClient` to accumulate real USD into the provenance record.
+
+Set ``$JEEVA_BACKEND=subscription`` to drive the loop through :class:`SubscriptionClient`
+instead — it shells out to the local Claude Code CLI via ``claude-agent-sdk`` and bills
+against the caller's Claude subscription rather than a separate Anthropic API key.
 """
 
 from __future__ import annotations
@@ -342,6 +346,17 @@ def _coerce_cmd(value: object) -> list[str]:
     return []
 
 
+def _default_completion(model: str) -> Completion:
+    """Return the default completion backend for ``model``.
+
+    ``$JEEVA_BACKEND=subscription`` opts into :class:`SubscriptionClient`; any
+    other value (including unset) keeps the direct-API :class:`AnthropicClient`.
+    """
+    if os.environ.get("JEEVA_BACKEND") == "subscription":
+        return SubscriptionClient(model)
+    return AnthropicClient(model)
+
+
 class LLMRepairAgent:
     """A :class:`RepairAgent` that plans one action per turn with a Claude call."""
 
@@ -358,7 +373,8 @@ class LLMRepairAgent:
         Args:
             spec: The resurrection spec to plan against.
             complete: Injected ``(system, user) -> (text, cost_usd)`` callable;
-                defaults to an Anthropic-backed client.
+                defaults to an Anthropic-backed client, or a subscription-backed
+                one when ``$JEEVA_BACKEND=subscription`` (see module docstring).
             model: Model id override (defaults to ``$JEEVA_MODEL`` or
                 :data:`DEFAULT_MODEL`).
             knowledge: Store of lessons from earlier runs; relevant ones are
@@ -366,7 +382,7 @@ class LLMRepairAgent:
         """
         self.spec = spec
         self.model = model or os.environ.get("JEEVA_MODEL", DEFAULT_MODEL)
-        self._complete = complete or AnthropicClient(self.model)
+        self._complete = complete or _default_completion(self.model)
         self._knowledge = knowledge
 
     def next_action(self, state: LoopState) -> RepairAction:
@@ -469,3 +485,68 @@ class AnthropicClient:
         in_tok = getattr(usage, "input_tokens", 0)
         out_tok = getattr(usage, "output_tokens", 0)
         return (in_tok * self._price_in + out_tok * self._price_out) / 1_000_000
+
+
+class SubscriptionClient:
+    """Completion backend that drives the local Claude Code CLI via ``claude-agent-sdk``.
+
+    Unlike :class:`AnthropicClient`, this bills against the caller's Claude
+    subscription (Pro/Max/Team) rather than a separate Anthropic API key — it
+    spawns the ``claude`` binary already authenticated in this environment
+    instead of calling ``anthropic.Anthropic()`` directly.
+    """
+
+    def __init__(self, model: str = DEFAULT_MODEL) -> None:
+        """Create the client (raises if ``claude-agent-sdk`` is absent).
+
+        Args:
+            model: Model id to request from the CLI.
+
+        Raises:
+            RuntimeError: If ``claude_agent_sdk`` is not installed.
+        """
+        try:
+            import claude_agent_sdk  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "subscription-backed resurrection needs claude-agent-sdk: "
+                "pip install 'sanjeevini-bio[agent]'."
+            ) from exc
+        self.model = model
+
+    def __call__(self, system: str, user: str) -> tuple[str, float]:
+        """Send one turn through the CLI and return ``(reply_text, cost_usd)``."""
+        import anyio
+
+        return anyio.run(self._aquery, system, user)
+
+    async def _aquery(self, system: str, user: str) -> tuple[str, float]:
+        """Run a single tool-free query and collect its text and reported cost."""
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            ResultMessage,
+            TextBlock,
+            query,
+        )
+
+        options = ClaudeAgentOptions(
+            system_prompt=system,
+            model=self.model,
+            tools=[],
+            permission_mode="bypassPermissions",
+            max_turns=1,
+            # An ANTHROPIC_API_KEY inherited from the parent shell would otherwise
+            # take billing precedence over the CLI's own subscription login.
+            env={"ANTHROPIC_API_KEY": ""},
+        )
+        text_parts: list[str] = []
+        cost = 0.0
+        async for message in query(prompt=user, options=options):
+            if isinstance(message, AssistantMessage):
+                text_parts.extend(
+                    block.text for block in message.content if isinstance(block, TextBlock)
+                )
+            elif isinstance(message, ResultMessage):
+                cost = message.total_cost_usd or 0.0
+        return "".join(text_parts), cost

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from sanjeevini.repair import agent as agent_module
 from sanjeevini.repair.agent import (
     DEFAULT_MODEL,
     LLMRepairAgent,
@@ -177,3 +178,47 @@ def test_agent_honours_jeeva_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JEEVA_MODEL", "claude-opus-4-8")
     agent = LLMRepairAgent(_spec(), complete=lambda _s, _u: ("{}", 0.0))
     assert agent.model == "claude-opus-4-8"
+
+
+# ---- _default_completion / backend selection -------------------------------
+
+
+def test_default_completion_uses_anthropic_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JEEVA_BACKEND", raising=False)
+    sentinel = object()
+    monkeypatch.setattr(agent_module, "AnthropicClient", lambda model: sentinel)
+    assert agent_module._default_completion("claude-sonnet-5") is sentinel
+
+
+def test_default_completion_honours_subscription_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEEVA_BACKEND", "subscription")
+    sentinel = object()
+    monkeypatch.setattr(agent_module, "SubscriptionClient", lambda model: sentinel)
+    assert agent_module._default_completion("claude-sonnet-5") is sentinel
+
+
+def test_default_completion_ignores_unknown_backend_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEEVA_BACKEND", "bogus")
+    sentinel = object()
+    monkeypatch.setattr(agent_module, "AnthropicClient", lambda model: sentinel)
+    assert agent_module._default_completion("claude-sonnet-5") is sentinel
+
+
+# ---- SubscriptionClient -----------------------------------------------------
+
+
+def test_subscription_client_call_collects_text_and_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The client should join AssistantMessage text blocks and take the
+    ResultMessage's reported cost, ignoring every other message type it sees."""
+    client = agent_module.SubscriptionClient.__new__(agent_module.SubscriptionClient)
+    client.model = "claude-sonnet-5"
+
+    async def fake_aquery(system: str, user: str) -> tuple[str, float]:
+        assert system == "sys"
+        assert user == "usr"
+        return '{"action":"give_up","reason":"done"}', 0.42
+
+    monkeypatch.setattr(client, "_aquery", fake_aquery)
+    text, cost = client("sys", "usr")
+    assert text == '{"action":"give_up","reason":"done"}'
+    assert cost == 0.42
