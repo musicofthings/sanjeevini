@@ -314,3 +314,26 @@ def extensions_for_check(sanity_check: str) -> tuple[str, ...]:
             if _alias_pattern(name).search(sanity_check):
                 return profile.extensions
     return ()
+
+
+def output_type_for_check(sanity_check: str) -> GenomicFileType | None:
+    """Return the :class:`GenomicFileType` a sanity check's claimed type names.
+
+    The type counterpart of :func:`extensions_for_check`: it lets the contract
+    emitter stamp a real output port type on a resurrected tool instead of the
+    ``ANY`` wildcard, so a downstream Compose edge into it is genuinely
+    type-checked. Matches on :attr:`OutputProfile.format_names` only — a check
+    must *name a format* — and returns ``None`` when none is named, which the
+    caller should read as "leave the port untyped (ANY)".
+
+    Args:
+        sanity_check: The sanity-check text from the plan.
+
+    Returns:
+        The named file type, or ``None`` when the check names no tracked format.
+    """
+    for profile in OUTPUT_PROFILES:
+        for name in profile.format_names:
+            if _alias_pattern(name).search(sanity_check):
+                return profile.file_type
+    return None

@@ -49,7 +49,7 @@ from typing import Literal, Protocol
 import yaml
 
 from sanjeevini import __version__ as JEEVA_VERSION
-from sanjeevini.contracts.output_type import extensions_for_check
+from sanjeevini.contracts.output_type import extensions_for_check, output_type_for_check
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
 from sanjeevini.repair.escalation import AttemptRecord, EscalatingResurrection
 from sanjeevini.repair.knowledge import (
@@ -73,7 +73,7 @@ from sanjeevini.scouts.workflow_scout import (
     detect_workflow_language,
 )
 
-Verdict = Literal["PASS", "TIMEOUT", "FAILED"]
+Verdict = Literal["PASS", "TIMEOUT", "FAILED", "BUDGET"]
 ResurrectionPlan = PythonResurrectionPlan | RResurrectionPlan | WorkflowResurrectionPlan
 
 # Consecutive unrecoverable container errors before the loop aborts (a dead
@@ -668,6 +668,7 @@ class RepairLoop:
         today: str | None = None,
         knowledge: KnowledgeStore | None = None,
         prior_attempts: Sequence[AttemptRecord] = (),
+        budget_usd: float | None = None,
     ) -> None:
         """Configure a repair loop.
 
@@ -682,6 +683,12 @@ class RepairLoop:
                 ``None`` disables learning (the default for tests).
             prior_attempts: Earlier attempts on other base images, recorded in the
                 provenance so a contract shows which images were ruled out first.
+            budget_usd: Hard cost ceiling in USD for this run. Once accumulated
+                agent cost reaches it, the loop stops before spending another
+                turn and returns a ``BUDGET`` verdict. ``None`` disables the cap.
+                Note the cap is only meaningful when cost tracking is active (see
+                :class:`~sanjeevini.repair.agent.AnthropicClient`); with cost
+                reporting off, every turn accrues ``0`` and the cap never fires.
         """
         self.spec = spec
         self.sandbox = sandbox
@@ -691,6 +698,7 @@ class RepairLoop:
         self.today = today or _utc_today()
         self.knowledge = knowledge
         self.prior_attempts = list(prior_attempts)
+        self.budget_usd = budget_usd
 
     def run(self) -> RepairOutcome:
         """Run the loop to a terminal verdict and emit the contract.
@@ -719,6 +727,17 @@ class RepairLoop:
         sandbox_errors = 0
 
         while turn < self.max_turns:
+            # Enforce the cost cap before spending another turn. Checked at the
+            # top (not after accrual) so the run never pays for a turn once it is
+            # already over budget; a single turn can still overshoot the cap by
+            # its own cost, since that is only known after the call returns.
+            if self.budget_usd is not None and cost >= self.budget_usd:
+                verdict = "BUDGET"
+                reason = (
+                    f"cost cap of ${self.budget_usd:.4f} reached "
+                    f"(spent ${cost:.4f}) before the sanity check passed"
+                )
+                break
             state = LoopState(
                 turn=turn + 1,
                 max_turns=self.max_turns,
@@ -979,9 +998,15 @@ class RepairLoop:
         return slug_dir
 
     def _schema(self) -> ContractSchema:
+        # The output port type is read back from the sanity check's structural
+        # claim (e.g. "the VCF output parses …" → vcf), so Compose can actually
+        # type-check an edge into this tool. Falls back to ANY when the check
+        # names no tracked format. The input type stays ANY — nothing in the run
+        # reliably identifies it, and a wrong type is worse than a wildcard.
+        out_type = output_type_for_check(self.spec.sanity_check) or GenomicFileType.ANY
         return ContractSchema(
             inputs=[IOPort(name="input", type=GenomicFileType.ANY, description="primary input")],
-            outputs=[IOPort(name="output", type=GenomicFileType.ANY, description="primary output")],
+            outputs=[IOPort(name="output", type=out_type, description="primary output")],
             gpu_required=self.spec.gpu_required,
             workflow_type=self.spec.workflow_type,  # type: ignore[arg-type]
         )
@@ -1075,6 +1100,7 @@ class RepairLoop:
             "PASS": "PASS — the sanity-check command exited 0 on the test input.",
             "TIMEOUT": f"OFF — {outcome.reason}",
             "FAILED": f"OFF — {outcome.reason}",
+            "BUDGET": f"OFF — {outcome.reason}",
         }[outcome.verdict]
         return (
             f"# Reproduction certificate — {self.spec.tool_slug}\n\n"
@@ -1495,11 +1521,21 @@ class ResurrectCommand:
         # precisely what escalating was meant to escape.
         resume = resume_image if not prior else None
         spec.base_image = image
+
+        # A hard cost cap is global across escalation attempts: each attempt gets
+        # only what earlier ones left unspent, so N retries can never spend N×
+        # the budget. An exhausted allowance (<= 0) makes the loop stop at once.
+        budget = getattr(self.args, "budget_usd", None)
+        if budget is not None:
+            budget = max(0.0, budget - sum(a.cost_usd for a in prior))
         sandbox = DockerSandbox(
             resume or image,
             workdir=self.args.workdir,
             docker_host=self.args.docker_host,
             gpus=self.args.gpus,
+            memory_gb=getattr(self.args, "memory", None),
+            cpus=getattr(self.args, "cpus", None),
+            network=getattr(self.args, "network", "open"),
             checkpoint_dir=checkpoint_dir if not prior else None,
         )
         sandbox.start()
@@ -1516,6 +1552,7 @@ class ResurrectCommand:
                 contracts_root=contracts_root,
                 knowledge=knowledge,
                 prior_attempts=prior,
+                budget_usd=budget,
             ).run()
         finally:
             if not self.args.keep:

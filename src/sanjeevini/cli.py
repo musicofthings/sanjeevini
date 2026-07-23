@@ -76,6 +76,27 @@ def _add_resurrect(sub: SubParsers) -> None:
         help="Remote Docker host, e.g. ssh://user@gpu-box.  Overrides DOCKER_HOST.",
     )
     p.add_argument("--gpus", default=None, help="GPU spec forwarded to docker run, e.g. 'all'.")
+    p.add_argument(
+        "--network",
+        choices=["open", "restricted", "none"],
+        default="restricted",
+        help="Sandbox egress policy (default: restricted). 'restricted' enforces a "
+        "package-mirror allowlist via a filtering proxy on an internal network "
+        "(fail-closed); 'none' is fully offline; 'open' is unrestricted.",
+    )
+    p.add_argument(
+        "--memory",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="Hard memory limit in GB for the sandbox (default: none).",
+    )
+    p.add_argument(
+        "--cpus",
+        type=int,
+        default=None,
+        help="CPU count limit for the sandbox (default: none).",
+    )
 
 
 def _add_pin(sub: SubParsers) -> None:
@@ -157,11 +178,9 @@ def _add_decay_check(sub: SubParsers) -> None:
 
 
 def _add_mcp(sub: SubParsers) -> None:
-    p = sub.add_parser("mcp", help="Start Jeeva as an MCP server (stdio transport).")
-    p.add_argument(
-        "--host", default="stdio", choices=["stdio", "sse"], help="Transport (default: stdio)."
-    )
-    p.add_argument("--port", type=int, default=8765, help="Port for SSE transport.")
+    # stdio is the only transport; kept flag-free so --help advertises nothing
+    # that isn't implemented.
+    sub.add_parser("mcp", help="Start Jeeva as an MCP server (stdio transport).")
 
 
 def main(argv: list[str] | None = None) -> None:

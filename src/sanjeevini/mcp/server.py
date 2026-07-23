@@ -6,8 +6,7 @@ decay-check, and registry-search directly, without driving the CLI.
 
 Transport
 ---------
-  stdio (default):  ``jeeva mcp``
-  SSE (web):        ``jeeva mcp --host sse --port 8765``
+  stdio:  ``jeeva mcp``  (newline-delimited JSON-RPC 2.0 over stdin/stdout)
 
 Usage from Claude Code
 ----------------------
@@ -370,11 +369,6 @@ def serve_stdio(lines: Iterable[str], out: TextIO) -> None:
 
 
 def serve(args: argparse.Namespace) -> None:
-    """Entry point called by the CLI 'jeeva mcp' subcommand."""
-    if getattr(args, "host", "stdio") == "sse":
-        print(
-            "SSE transport is not implemented; use the default stdio transport (`jeeva mcp`).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    """Entry point called by the CLI 'jeeva mcp' subcommand (stdio transport)."""
+    del args  # stdio is the only transport; no options to read.
     serve_stdio(sys.stdin, sys.stdout)

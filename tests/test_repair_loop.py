@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sanjeevini.contracts.schema import ContractSchema
+from sanjeevini.contracts.schema import ContractSchema, GenomicFileType
 from sanjeevini.repair.loop import (
     DecayCheckCommand,
     DecayVerdict,
@@ -236,9 +236,11 @@ def test_loop_pass_emits_full_contract(tmp_path: Path) -> None:
     ):
         assert (d / name).is_file(), name
 
-    # contract.yaml embeds a valid ContractSchema
+    # contract.yaml embeds a valid ContractSchema whose output port type is read
+    # back from the sanity check ("output VCF …" → vcf), not left as ANY.
     payload = yaml.safe_load((d / "contract.yaml").read_text())
-    ContractSchema.model_validate(payload["schema"])
+    schema = ContractSchema.model_validate(payload["schema"])
+    assert schema.outputs[0].type is GenomicFileType.VCF
 
     # smoke_test.sh runs the sanity command; predict.py records it
     assert "python predict.py" in (d / "smoke_test.sh").read_text()
@@ -321,6 +323,55 @@ def test_loop_enforces_turn_limit(tmp_path: Path) -> None:
     assert outcome.verdict == "TIMEOUT"
     assert outcome.turns == 3
     assert len(sandbox.execs) == 3
+
+
+class _CostingAgent:
+    """Emits non-sanity execs, each accruing a fixed cost — to exercise the cap."""
+
+    def __init__(self, cost_per_turn: float) -> None:
+        self._cost = cost_per_turn
+
+    def next_action(self, state: LoopState) -> RepairAction:
+        return RepairAction(kind="exec", cmd=["true"], cost_usd=self._cost)
+
+
+def test_loop_stops_at_budget_cap(tmp_path: Path) -> None:
+    # $0.40/turn against a $1.00 cap: turns 1–3 spend to $1.20, and the top-of-loop
+    # check then stops the run before turn 4 rather than paying for it.
+    sandbox = FakeSandbox()
+    loop = RepairLoop(
+        _spec(),
+        sandbox,
+        _CostingAgent(0.40),
+        max_turns=50,
+        contracts_root=tmp_path,
+        budget_usd=1.00,
+    )
+    outcome = loop.run()
+    assert outcome.verdict == "BUDGET"
+    assert outcome.turns == 3
+    assert outcome.cost_usd == pytest.approx(1.20)
+    assert "cost cap" in outcome.reason
+    prov = json.loads((tmp_path / "foo" / "PROVENANCE.json").read_text())
+    assert prov["sanity_check_verdict"] == "BUDGET"
+
+
+def test_loop_with_exhausted_budget_stops_before_any_turn(tmp_path: Path) -> None:
+    sandbox = FakeSandbox()
+    loop = RepairLoop(_spec(), sandbox, InfiniteAgent(), contracts_root=tmp_path, budget_usd=0.0)
+    outcome = loop.run()
+    assert outcome.verdict == "BUDGET"
+    assert outcome.turns == 0
+    assert sandbox.execs == []
+
+
+def test_loop_no_budget_runs_to_turn_limit(tmp_path: Path) -> None:
+    # A None budget must not enforce anything, even with per-turn cost accruing.
+    sandbox = FakeSandbox()
+    loop = RepairLoop(_spec(), sandbox, _CostingAgent(5.0), max_turns=2, contracts_root=tmp_path)
+    outcome = loop.run()
+    assert outcome.verdict == "TIMEOUT"
+    assert outcome.turns == 2
 
 
 def test_loop_recovers_from_command_timeout(tmp_path: Path) -> None:

@@ -34,9 +34,12 @@ import uuid
 import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from sanjeevini.sandbox.checkpoint import CheckpointStore, TurnRecord
+
+if TYPE_CHECKING:
+    from sanjeevini.sandbox.egress import EgressGateway
 
 # runner(argv, *, timeout, env) -> (returncode, stdout, stderr)
 # May raise subprocess.TimeoutExpired to signal a timeout.
@@ -44,6 +47,72 @@ Runner = Callable[..., "tuple[int, str, str]"]
 
 _DEFAULT_WORKDIR = "/workspace"
 _ONT_RAW_MOUNT = "/data/raw"
+
+# Network egress policy modes for the sandbox.
+#   "open"       — default Docker networking, no restriction (fastest, least safe).
+#   "restricted" — enforced allowlist: the container joins an ``--internal``
+#                  network whose only route out is a filtering Squid proxy
+#                  (see :mod:`sanjeevini.sandbox.egress`). Fail-closed.
+#   "none"       — no network at all (``docker run --network none``).
+NETWORK_MODES = ("open", "restricted", "none")
+
+# Standard proxy env vars set inside a restricted container, and the loopback
+# addresses that must bypass the proxy.
+_PROXY_ENV_VARS = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
+_NO_PROXY_VALUE = "localhost,127.0.0.1,::1"
+
+# Hosts a resurrection legitimately needs to reach: language package indexes and
+# OS/scientific mirrors. This is the allowlist the restricted-mode proxy enforces.
+EGRESS_ALLOWLIST: tuple[str, ...] = (
+    "pypi.org",
+    "files.pythonhosted.org",
+    "deb.debian.org",
+    "security.debian.org",
+    "archive.debian.org",
+    "archive.ubuntu.com",
+    "security.ubuntu.com",
+    "ports.ubuntu.com",
+    "repo.anaconda.com",
+    "conda.anaconda.org",
+    "cloud.r-project.org",
+    "bioconductor.org",
+    "github.com",
+    "codeload.github.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+)
+
+
+def plan_network_args(network: str) -> list[str]:
+    """Return the static ``docker run`` network args for ``open``/``none`` modes.
+
+    Pure and unit-testable. ``restricted`` adds no static args here — its network
+    is a per-run internal network created by
+    :class:`~sanjeevini.sandbox.egress.EgressGateway` and attached in
+    :meth:`DockerSandbox.start` — so this returns ``[]`` for it.
+
+    Args:
+        network: One of :data:`NETWORK_MODES`.
+
+    Returns:
+        The docker run flags to add for the mode (possibly empty).
+
+    Raises:
+        ValueError: If ``network`` is not a known mode.
+    """
+    if network not in NETWORK_MODES:
+        raise ValueError(f"unknown network mode {network!r}; expected one of {NETWORK_MODES}")
+    return ["--network", "none"] if network == "none" else []
+
+
+def _proxy_env_args(proxy_url: str) -> list[str]:
+    """Return ``-e`` flags exporting the standard proxy vars into a container."""
+    args: list[str] = []
+    for var in _PROXY_ENV_VARS:
+        args += ["-e", f"{var}={proxy_url}"]
+    for var in ("NO_PROXY", "no_proxy"):
+        args += ["-e", f"{var}={_NO_PROXY_VALUE}"]
+    return args
 
 
 class DockerError(RuntimeError):
@@ -159,6 +228,11 @@ class DockerSandbox:
         platform: str = "linux/amd64",
         binary: str | None = None,
         runner: Runner = _subprocess_runner,
+        network: str = "open",
+        egress_allowlist: Sequence[str] = EGRESS_ALLOWLIST,
+        egress_image: str | None = None,
+        pids_limit: int | None = 4096,
+        no_new_privileges: bool = True,
     ) -> None:
         """Configure a sandbox (no container is created until :meth:`start`).
 
@@ -178,7 +252,20 @@ class DockerSandbox:
             platform: Docker platform string (default ``linux/amd64``).
             binary: Path to the docker binary; auto-detected if omitted.
             runner: Injected subprocess callable, for testing without Docker.
+            network: Egress policy — one of :data:`NETWORK_MODES`. ``"restricted"``
+                enforces the allowlist with a per-run filtering proxy on an
+                internal network (fail-closed).
+            egress_allowlist: Domains the restricted-mode proxy permits. Defaults
+                to :data:`EGRESS_ALLOWLIST` (package indexes and OS mirrors).
+            egress_image: Squid image for restricted mode; ``None`` uses the
+                egress module's default (overridable via ``$JEEVA_EGRESS_PROXY_IMAGE``).
+            pids_limit: Hard cap on process count (fork-bomb guard). ``None``
+                disables the cap. Defaults to 4096 — ample for parallel builds.
+            no_new_privileges: Add ``--security-opt no-new-privileges`` so a
+                setuid binary in the target cannot escalate. Defaults to ``True``.
         """
+        if network not in NETWORK_MODES:
+            raise ValueError(f"unknown network mode {network!r}; expected one of {NETWORK_MODES}")
         self.image = image
         self.workdir = workdir
         self.docker_host = docker_host
@@ -189,6 +276,12 @@ class DockerSandbox:
         self.name = name or _new_name()
         self.binary = binary or find_docker()
         self._runner = runner
+        self.network = network
+        self.egress_allowlist = list(egress_allowlist)
+        self.egress_image = egress_image
+        self.pids_limit = pids_limit
+        self.no_new_privileges = no_new_privileges
+        self._gateway: EgressGateway | None = None
         self.container_id: str | None = None
         self.started = False
 
@@ -278,6 +371,16 @@ class DockerSandbox:
             args += ["--memory", f"{self.memory_gb}g"]
         if self.cpus is not None:
             args += ["--cpus", str(self.cpus)]
+        if self.pids_limit is not None:
+            args += ["--pids-limit", str(self.pids_limit)]
+        if self.no_new_privileges:
+            args += ["--security-opt", "no-new-privileges"]
+        if self.network == "restricted":
+            # Enforced allowlist: stand up the egress gateway (fail-closed) and
+            # join its internal network, whose only route out is the proxy.
+            args += self._start_egress_gateway()
+        else:
+            args += plan_network_args(self.network)
         for host, container, read_only in self._volumes:
             spec = f"{host}:{container}:ro" if read_only else f"{host}:{container}"
             args += ["-v", spec]
@@ -289,6 +392,28 @@ class DockerSandbox:
         if self.gpus:
             self._warn_on_cuda_mismatch()
         return self.container_id
+
+    def _start_egress_gateway(self) -> list[str]:
+        """Bring up the restricted-mode egress gateway and return its docker args.
+
+        Returns the ``--network`` flag joining the sandbox to the gateway's
+        internal network plus the proxy env vars. Raises (fail-closed) if the
+        gateway cannot start, so a restricted run never silently gets open
+        networking.
+        """
+        from sanjeevini.sandbox.egress import EgressGateway
+
+        gateway = EgressGateway(
+            runner=self._runner,
+            allowlist=self.egress_allowlist,
+            docker_host=self.docker_host,
+            image=self.egress_image,
+            binary=self.binary,
+            name=f"jeeva-egress-{self.name}",
+        )
+        proxy_url, network_name = gateway.start()
+        self._gateway = gateway
+        return ["--network", network_name, *_proxy_env_args(proxy_url)]
 
     def _warn_on_cuda_mismatch(self) -> None:
         """Warn (never fail) if the image's CUDA version may exceed the host driver.
@@ -326,14 +451,20 @@ class DockerSandbox:
             force: If ``True``, ``docker rm -f`` (kill + remove) immediately.
                 Otherwise stop gracefully then remove.
         """
-        if not self.started:
-            return
-        if force:
-            self._docker(["rm", "-f", self.name])
-        else:
-            self._docker(["stop", self.name])
-            self._docker(["rm", self.name])
-        self.started = False
+        try:
+            if self.started:
+                if force:
+                    self._docker(["rm", "-f", self.name])
+                else:
+                    self._docker(["stop", self.name])
+                    self._docker(["rm", self.name])
+                self.started = False
+        finally:
+            # Always tear the egress gateway down — including when the container
+            # itself never started (a failed run must not leak the proxy/network).
+            if self._gateway is not None:
+                self._gateway.stop()
+                self._gateway = None
 
     # ---- execution ---------------------------------------------------------
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import re
 import sys
 import time
 from collections.abc import Callable, Iterable
@@ -105,8 +106,13 @@ def _parse_releases(data: dict[str, Any]) -> list[ReleaseInfo]:
 
 
 def _cache_path(cache_dir: Path, package: str, date: _dt.date) -> Path:
-    """Return the cache file path for a package/date pair."""
-    safe = package.replace("/", "_").lower()
+    """Return the cache file path for a package/date pair.
+
+    The package name is reduced to ``[a-z0-9._-]`` and stripped of leading dots,
+    so a hostile or malformed name (``../../etc/passwd``) cannot escape the cache
+    directory when it becomes part of the filename.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", package).lower().lstrip(".") or "pkg"
     return cache_dir / f"{safe}_{date.isoformat()}.json"
 
 

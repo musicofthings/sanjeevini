@@ -409,6 +409,7 @@ def test_attempt_record_to_dict_is_serialisable() -> None:
         "rule",
         "rationale",
         "signal",
+        "cost_usd",
     }
 
 
@@ -558,6 +559,7 @@ def test_provenance_carries_blockers_and_the_escalation_trail(tmp_path: Path) ->
             "rule": "python2_sources",
             "rationale": "the sources are Python 2",
             "signal": "SyntaxError: Missing parentheses in call to 'print'",
+            "cost_usd": 0.0,
         }
     ]
 

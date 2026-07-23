@@ -184,7 +184,9 @@ def propose_escalation(
         The highest-priority :class:`EscalationStep` whose rule matched and whose
         target has not been tried, or ``None`` if nothing justifies a retry.
     """
-    if verdict == "PASS":
+    # A PASS has nothing to escalate; a BUDGET stop means the cost cap is spent,
+    # so trying another image would only breach the cap the caller asked us to honour.
+    if verdict in ("PASS", "BUDGET"):
         return None
     if any(marker in reason for marker in _UNESCALATABLE):
         return None
@@ -227,6 +229,8 @@ class AttemptRecord:
         rule: The rule that justified that move.
         rationale: Why that rule fired.
         signal: The blocker line the rule matched — the evidence.
+        cost_usd: Agent cost this attempt accrued, so a caller enforcing a global
+            budget can subtract it from the remaining allowance for later attempts.
     """
 
     base_image: str
@@ -237,6 +241,7 @@ class AttemptRecord:
     rule: str = ""
     rationale: str = ""
     signal: str = ""
+    cost_usd: float = 0.0
 
     def record_escalation(self, step: EscalationStep) -> None:
         """Note that the run left this image for ``step``'s image, and why."""
@@ -256,6 +261,7 @@ class AttemptRecord:
             "rule": self.rule,
             "rationale": self.rationale,
             "signal": self.signal,
+            "cost_usd": self.cost_usd,
         }
 
 
@@ -299,6 +305,7 @@ class EscalatingResurrection:
                 verdict=outcome.verdict,
                 turns=outcome.turns,
                 reason=outcome.reason,
+                cost_usd=outcome.cost_usd,
             )
             self.attempts.append(record)
             tried.append(image)

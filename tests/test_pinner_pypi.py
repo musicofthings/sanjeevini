@@ -12,10 +12,20 @@ from sanjeevini.pinners.pypi import (
     NOT_FOUND,
     PyPIPinner,
     ReleaseInfo,
+    _cache_path,
     pin_pypi,
     resolve_pypi,
     select_version,
 )
+
+
+def test_cache_path_sanitises_malicious_package_name(tmp_path: Path) -> None:
+    path = _cache_path(tmp_path, "../../etc/passwd", dt.date(2021, 1, 1))
+    # The result stays inside the cache dir: no separators survive, so the name
+    # cannot traverse out of tmp_path, and it does not resolve to /etc/passwd.
+    assert path.parent == tmp_path
+    assert "/" not in path.name
+    assert path.resolve().parent == tmp_path.resolve()
 
 
 class FakeResponse:

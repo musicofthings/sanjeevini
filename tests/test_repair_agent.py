@@ -8,6 +8,7 @@ from sanjeevini.repair import agent as agent_module
 from sanjeevini.repair.agent import (
     DEFAULT_MODEL,
     LLMRepairAgent,
+    _price_from_env,
     parse_action,
     render_state,
 )
@@ -42,6 +43,22 @@ def _state(**kw: object) -> LoopState:
 
 
 # ---- parse_action ---------------------------------------------------------
+
+
+def test_price_from_env_parses_valid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEEVA_PRICE_IN_PER_MTOK", "3.0")
+    assert _price_from_env("JEEVA_PRICE_IN_PER_MTOK") == 3.0
+
+
+def test_price_from_env_treats_unset_and_malformed_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JEEVA_PRICE_IN_PER_MTOK", raising=False)
+    assert _price_from_env("JEEVA_PRICE_IN_PER_MTOK") is None
+    monkeypatch.setenv("JEEVA_PRICE_IN_PER_MTOK", "not-a-number")
+    assert _price_from_env("JEEVA_PRICE_IN_PER_MTOK") is None
+    monkeypatch.setenv("JEEVA_PRICE_IN_PER_MTOK", "-1")
+    assert _price_from_env("JEEVA_PRICE_IN_PER_MTOK") is None
 
 
 def test_parse_bare_exec_action() -> None:

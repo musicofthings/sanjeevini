@@ -7,6 +7,7 @@ from sanjeevini.contracts.output_type import (
     GENERIC_CHECK,
     extensions_for_check,
     infer_output_type,
+    output_type_for_check,
     profile_for,
     score_output_types,
 )
@@ -137,6 +138,15 @@ def test_extensions_for_a_typed_check() -> None:
 
 def test_extensions_for_an_untyped_check_are_empty() -> None:
     assert extensions_for_check(GENERIC_CHECK) == ()
+
+
+def test_output_type_for_a_typed_check() -> None:
+    assert output_type_for_check("the VCF output contains ≥ 1 variant") is GenomicFileType.VCF
+    assert output_type_for_check("the BAM passes samtools quickcheck") is GenomicFileType.BAM
+
+
+def test_output_type_for_an_untyped_check_is_none() -> None:
+    assert output_type_for_check(GENERIC_CHECK) is None
 
 
 def test_profile_for_a_tracked_type() -> None:

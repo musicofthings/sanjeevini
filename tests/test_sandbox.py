@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from sanjeevini.sandbox.checkpoint import CheckpointStore
-from sanjeevini.sandbox.docker_sandbox import DockerSandbox, ExecResult
+from sanjeevini.sandbox.docker_sandbox import DockerSandbox, ExecResult, plan_network_args
 
 
 class FakeRunner:
@@ -72,6 +72,71 @@ def test_start_returns_container_id_and_builds_args() -> None:
     assert "--cpus" in run and "8" in run
     assert "-w" in run and "/w" in run
     assert run[-3:] == ["ubuntu:24.04", "sleep", "infinity"]
+
+
+def test_plan_network_args_pure() -> None:
+    assert plan_network_args("open") == []
+    assert plan_network_args("none") == ["--network", "none"]
+    # restricted's network is added by the gateway in start(), not here.
+    assert plan_network_args("restricted") == []
+
+
+def test_plan_network_args_rejects_unknown() -> None:
+    with pytest.raises(ValueError, match="unknown network mode"):
+        plan_network_args("bogus")
+
+
+def test_start_hardens_by_default() -> None:
+    box, runner = _box()
+    box.start()
+    run = runner.last("run")
+    assert "--pids-limit" in run and "4096" in run
+    assert run[run.index("--security-opt") + 1] == "no-new-privileges"
+
+
+def test_start_hardening_can_be_disabled() -> None:
+    box, runner = _box(pids_limit=None, no_new_privileges=False)
+    box.start()
+    run = runner.last("run")
+    assert "--pids-limit" not in run
+    assert "--security-opt" not in run
+
+
+def test_start_network_none_is_offline() -> None:
+    box, runner = _box(network="none")
+    box.start()
+    run = runner.last("run")
+    assert run[run.index("--network") + 1] == "none"
+
+
+def test_start_restricted_enforces_via_gateway() -> None:
+    box, runner = _box(network="restricted", name="sbx")
+    box.start()
+    run = runner.last("run")
+    # The sandbox joins the gateway's internal network — its only route out —
+    # and is handed the proxy URL that resolves to the proxy on that network.
+    assert run[run.index("--network") + 1] == "jeeva-egress-sbx-net"
+    assert "HTTP_PROXY=http://jeeva-egress-sbx:3128" in run
+    assert "HTTPS_PROXY=http://jeeva-egress-sbx:3128" in run
+    # The gateway itself was created: an internal network and the proxy container.
+    assert ["docker", "network", "create", "--internal", "jeeva-egress-sbx-net"] in runner.calls
+    assert any(c[:2] == ["docker", "create"] and "jeeva-egress-sbx" in c for c in runner.calls)
+
+
+def test_start_restricted_fails_closed_when_gateway_fails() -> None:
+    from sanjeevini.sandbox.docker_sandbox import DockerError
+
+    box, runner = _box(network="restricted", name="sbx")
+    runner.fail_on["network"] = (1, "", "no bridge")  # network create fails
+    with pytest.raises(DockerError):
+        box.start()
+    # Fail-closed: the sandbox container was never launched with open networking.
+    assert runner.last("run") is None
+
+
+def test_unknown_network_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown network mode"):
+        _box(network="firewalled")
 
 
 def test_start_is_idempotent() -> None:

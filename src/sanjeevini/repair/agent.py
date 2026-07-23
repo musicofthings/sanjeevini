@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shlex
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -41,6 +42,34 @@ if TYPE_CHECKING:
 Completion = Callable[[str, str], "tuple[str, float]"]
 
 DEFAULT_MODEL = "claude-sonnet-5"
+
+# Per-million-token prices for cost tracking are read from the environment rather
+# than hard-coded, because published prices change and a stale table would bill
+# decisions against wrong numbers. Set both to enable USD accounting on the
+# direct-API backend; the subscription backend reports real cost regardless.
+_PRICE_IN_ENV = "JEEVA_PRICE_IN_PER_MTOK"
+_PRICE_OUT_ENV = "JEEVA_PRICE_OUT_PER_MTOK"
+
+# Warn at most once per process when the API backend runs with cost tracking off,
+# so a reported $0.00 is never silently mistaken for "this run was free".
+_warned_no_prices = False
+
+
+def _price_from_env(name: str) -> float | None:
+    """Return a per-MTok price from environment variable ``name``, or ``None``.
+
+    A malformed value is treated as unset rather than raising: a bad price must
+    not abort a resurrection, only disable cost tracking.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
 
 # How many times to re-ask when a reply is malformed/empty before giving up.
 _MAX_REPLY_ATTEMPTS = 3
@@ -381,7 +410,9 @@ class LLMRepairAgent:
                 injected into each turn's prompt. ``None`` disables retrieval.
         """
         self.spec = spec
-        self.model = model or os.environ.get("JEEVA_MODEL", DEFAULT_MODEL)
+        # Explicit trailing default keeps the type `str` (env-get is str | None)
+        # and guards the edge case of JEEVA_MODEL being set but empty.
+        self.model = model or os.environ.get("JEEVA_MODEL") or DEFAULT_MODEL
         self._complete = complete or _default_completion(self.model)
         self._knowledge = knowledge
 
@@ -430,8 +461,10 @@ class AnthropicClient:
         Args:
             model: Model id to call.
             max_tokens: Max output tokens per turn.
-            price_in_per_mtok: Optional input price ($/1M tokens) for cost tracking.
-            price_out_per_mtok: Optional output price ($/1M tokens) for cost tracking.
+            price_in_per_mtok: Input price ($/1M tokens) for cost tracking. When
+                ``None``, falls back to ``$JEEVA_PRICE_IN_PER_MTOK``.
+            price_out_per_mtok: Output price ($/1M tokens) for cost tracking. When
+                ``None``, falls back to ``$JEEVA_PRICE_OUT_PER_MTOK``.
 
         Raises:
             RuntimeError: If ``anthropic`` is not installed.
@@ -445,8 +478,15 @@ class AnthropicClient:
             ) from exc
         self.model = model
         self.max_tokens = max_tokens
-        self._price_in = price_in_per_mtok
-        self._price_out = price_out_per_mtok
+        self._price_in = (
+            price_in_per_mtok if price_in_per_mtok is not None else _price_from_env(_PRICE_IN_ENV)
+        )
+        self._price_out = (
+            price_out_per_mtok
+            if price_out_per_mtok is not None
+            else _price_from_env(_PRICE_OUT_ENV)
+        )
+        self._warn_if_cost_tracking_off()
         # Let the SDK ride out transient rate-limit / overloaded (429/529) errors
         # with backoff before an exception ever reaches the loop.
         self._client = anthropic.Anthropic(max_retries=6)
@@ -458,7 +498,9 @@ class AnthropicClient:
         always the schema-valid action serialised as JSON (never free-form prose
         we have to hope parses).
         """
-        response = self._client.messages.create(  # type: ignore[call-overload]
+        # call-overload fires only when anthropic's real stubs are installed; the
+        # unused-ignore code keeps mypy quiet in the stub-less CI configuration too.
+        response = self._client.messages.create(  # type: ignore[call-overload, unused-ignore]
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
@@ -475,8 +517,26 @@ class AnthropicClient:
         )
         return text, self._cost(response)
 
+    def _warn_if_cost_tracking_off(self) -> None:
+        """Warn once if neither price is set, so ``$0.00`` is not mistaken for free.
+
+        A ``--budget-usd`` cap is only enforceable when cost is actually tracked;
+        without prices every turn accrues zero and the cap can never fire, so the
+        operator must know cost accounting is inactive.
+        """
+        global _warned_no_prices
+        if (self._price_in is None or self._price_out is None) and not _warned_no_prices:
+            _warned_no_prices = True
+            warnings.warn(
+                "cost tracking is OFF: reported cost will be $0.00 and any "
+                f"--budget-usd cap cannot fire. Set {_PRICE_IN_ENV} and "
+                f"{_PRICE_OUT_ENV} (USD per 1M tokens) to enable it.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     def _cost(self, response: object) -> float:
-        """Best-effort USD cost from token usage, when prices were provided."""
+        """Best-effort USD cost from token usage, when both prices are available."""
         if self._price_in is None or self._price_out is None:
             return 0.0
         usage = getattr(response, "usage", None)

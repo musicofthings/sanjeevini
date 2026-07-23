@@ -11,7 +11,9 @@ from sanjeevini.compose.pipeline import (
     ComposeCommand,
     Pipeline,
     PipelineStep,
+    StepRun,
     _parse_overrides,
+    _resolve_expr,
 )
 from sanjeevini.contracts.schema import ContractSchema, GenomicFileType, IOPort
 
@@ -75,6 +77,12 @@ def test_non_mapping_yaml_raises() -> None:
         Pipeline("- just\n- a\n- list\n", schema_resolver=lambda _t: None)
 
 
+def test_parse_single_line_inline_yaml() -> None:
+    # No newline, not an existing file → parsed as inline, not treated as a path.
+    pipe = Pipeline("{name: oneliner, steps: []}", schema_resolver=lambda _t: None)
+    assert pipe.name == "oneliner"
+
+
 # ---- validation -----------------------------------------------------------
 
 
@@ -122,6 +130,90 @@ def test_run_aborts_without_executing_on_error() -> None:
 def test_parse_overrides() -> None:
     assert _parse_overrides(["a=1", "b = two", "junk"]) == {"a": "1", "b": "two"}
     assert _parse_overrides(None) == {}
+
+
+# ---- execution ------------------------------------------------------------
+
+_TWO_STEP_YAML = """\
+name: two_step
+params:
+  sample: { type: string, default: S1 }
+steps:
+  - name: a
+    tool: maker
+    outputs:
+      out: ${workdir}/${params.sample}.bam
+    command: "make ${outputs.out}"
+  - name: b
+    tool: caller
+    inputs:
+      in_bam: ${steps.a.outputs.out}
+    outputs:
+      vcf: ${workdir}/${params.sample}.vcf
+    command: "call ${inputs.in_bam} -o ${outputs.vcf}"
+outputs:
+  final_vcf: ${steps.b.outputs.vcf}
+"""
+
+
+class _RecordingExecutor:
+    """Records each step's resolved command; returns a scripted exit code."""
+
+    def __init__(self, codes: dict[str, int] | None = None) -> None:
+        self._codes = codes or {}
+        self.commands: list[tuple[str, str]] = []  # (image, command)
+
+    def run(self, *, image, command, host_workdir, gpus, docker_host):  # noqa: ANN001
+        self.commands.append((image, command))
+        # image is "img-<tool>"; recover the step by matching later. Use command
+        # text to key the scripted code where callers need per-step control.
+        code = self._codes.get(image, 0)
+        return StepRun(code, "ok", "" if code == 0 else "boom")
+
+
+def _images(tool: str) -> str | None:
+    return f"img-{tool}"
+
+
+def test_execute_threads_outputs_and_resolves_vars(tmp_path: Path) -> None:
+    ex = _RecordingExecutor()
+    pipe = Pipeline(_TWO_STEP_YAML, schema_resolver=lambda _t: None, image_resolver=_images)
+    result = pipe.run(executor=ex, host_workdir=tmp_path)
+
+    assert result.success is True
+    assert result.steps_run == ["a", "b"]
+    # ${workdir}/${params.sample} → /work/S1; step b sees step a's resolved output.
+    assert ex.commands[0] == ("img-maker", "make /work/S1.bam")
+    assert ex.commands[1] == ("img-caller", "call /work/S1.bam -o /work/S1.vcf")
+    # the output manifest resolves through the step outputs
+    assert result.outputs == {"final_vcf": "/work/S1.vcf"}
+
+
+def test_execute_override_wins_over_default(tmp_path: Path) -> None:
+    ex = _RecordingExecutor()
+    pipe = Pipeline(_TWO_STEP_YAML, schema_resolver=lambda _t: None, image_resolver=_images)
+    pipe.run({"sample": "HG002"}, executor=ex, host_workdir=tmp_path)
+    assert ex.commands[0] == ("img-maker", "make /work/HG002.bam")
+
+
+def test_execute_stops_at_first_failing_step(tmp_path: Path) -> None:
+    ex = _RecordingExecutor(codes={"img-maker": 3})
+    pipe = Pipeline(_TWO_STEP_YAML, schema_resolver=lambda _t: None, image_resolver=_images)
+    result = pipe.run(executor=ex, host_workdir=tmp_path)
+    assert result.success is False
+    assert result.steps_run == ["a"]  # b never ran
+    assert any("step 'a'" in e and "exit 3" in e for e in result.errors)
+
+
+def test_run_raises_when_image_missing(tmp_path: Path) -> None:
+    pipe = Pipeline(_TWO_STEP_YAML, schema_resolver=lambda _t: None, image_resolver=lambda _t: None)
+    with pytest.raises(RuntimeError, match="no resurrected image"):
+        pipe.run(host_workdir=tmp_path)
+
+
+def test_resolve_expr_leaves_unknown_refs_verbatim() -> None:
+    out = _resolve_expr("${params.x} ${bogus.y}", {"x": "1"}, "/work", {}, {}, {})
+    assert out == "1 ${bogus.y}"
 
 
 # ---- ComposeCommand -------------------------------------------------------
